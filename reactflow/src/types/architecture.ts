@@ -5,7 +5,10 @@ export type ComponentType =
   | "peripheral"
   | "interface"
   | "clockReset"
-  | "custom";
+  | "custom"
+  | "dma"
+  | "interruptController"
+  | "debug";
 
 export type PortDirection = "in" | "out" | "inout";
 

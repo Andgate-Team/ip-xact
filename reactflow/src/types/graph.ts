@@ -1,5 +1,6 @@
 import type { Edge, Node } from "reactflow";
 import type { Component, ComponentType, Connection } from "./architecture";
+import type { ConnectionType, LayoutLayer } from "../lib/preprocess/types";
 
 export interface PortPosition {
   portId: string;
@@ -12,11 +13,19 @@ export interface ComponentNodeData {
   kind: "component";
   component: Component;
   portPositions?: PortPosition[];
+  layer?: LayoutLayer;
 }
 
 export interface ClusterNodeData {
   kind: "cluster";
   cluster: ArchitectureCluster;
+}
+
+export interface BusChannelNodeData {
+  kind: "busChannel";
+  component: Component;
+  layer: LayoutLayer;
+  portPositions?: PortPosition[];
 }
 
 export interface ArchitectureCluster {
@@ -46,14 +55,15 @@ export interface HierarchyNode {
   };
 }
 
-export type ArchitectureNodeData = ComponentNodeData | ClusterNodeData;
+export type ArchitectureNodeData = ComponentNodeData | ClusterNodeData | BusChannelNodeData;
 
 export interface ArchitectureEdgeData {
   connection: Connection;
   connectionCount?: number;
+  connectionType?: ConnectionType;
 }
 
-export type ArchitectureFlowNode = Node<ArchitectureNodeData, "architecture">;
+export type ArchitectureFlowNode = Node<ArchitectureNodeData, "architecture" | "busChannel">;
 export type ArchitectureFlowEdge = Edge<ArchitectureEdgeData>;
 
 export type EdgeVisualState = "highlighted" | "dimmed" | "neutral";

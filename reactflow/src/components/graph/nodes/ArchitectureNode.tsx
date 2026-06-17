@@ -1,5 +1,5 @@
 import clsx from "clsx";
-import { memo, type CSSProperties, useMemo } from "react";
+import { memo, type CSSProperties } from "react";
 import { Handle, type NodeProps, Position } from "reactflow";
 import { nodeColorMap } from "../../../lib/transform/colorMap";
 import type { ArchitectureNodeData } from "../../../types";
@@ -7,10 +7,9 @@ import { useNodeHighlighting } from "../../../hooks/useNodeHighlighting";
 import { useGraphStore } from "../../../store/graphStore";
 import { NodeHeader } from "./NodeHeader";
 
-const NODE_HEIGHT = 88;
-const PORT_PADDING = 12;
-
 function ArchitectureNodeComponent({ id, data }: NodeProps<ArchitectureNodeData>) {
+  if (data.kind === "busChannel") return null;
+
   const isCluster = data.kind === "cluster";
   const name = isCluster ? data.cluster.name : data.component.name;
   const type = isCluster ? data.cluster.type : data.component.type;
@@ -21,47 +20,14 @@ function ArchitectureNodeComponent({ id, data }: NodeProps<ArchitectureNodeData>
 
   const isExpanded = isCluster && expansionPath.includes(data.cluster.id);
   const depth = isCluster ? data.cluster.depth : 0;
-  const isExpandable = isCluster && (data.cluster.depth < 2 || data.cluster.componentCount > 12);
+  const isExpandable = isCluster && (data.cluster.depth < 2 || data.cluster.componentCount > 6);
   const parentGroupName = isCluster && depth > 1
     ? expansionPath[expansionPath.indexOf(data.cluster.id) - 1]?.replace("hierarchy:", "").replace(/:/g, " > ")
     : null;
 
-  const portPositions = useMemo(() => {
-    if (data.kind !== "component") return new Map<string, number>();
-
-    const elkPositions = data.portPositions;
-    if (elkPositions && elkPositions.length > 0) {
-      const map = new Map<string, number>();
-      for (const pos of elkPositions) {
-        map.set(pos.portId, pos.y);
-      }
-      return map;
-    }
-
-    const ports = data.component.ports;
-    const leftPorts = ports.filter((p) => p.direction === "in" || p.direction === "inout");
-    const rightPorts = ports.filter((p) => p.direction === "out" || p.direction === "inout");
-
-    const positions = new Map<string, number>();
-
-    leftPorts.forEach((port, idx) => {
-      const spacing = (NODE_HEIGHT - PORT_PADDING * 2) / Math.max(leftPorts.length - 1, 1);
-      const y = leftPorts.length === 1
-        ? NODE_HEIGHT / 2
-        : PORT_PADDING + idx * spacing;
-      positions.set(port.id, y);
-    });
-
-    rightPorts.forEach((port, idx) => {
-      const spacing = (NODE_HEIGHT - PORT_PADDING * 2) / Math.max(rightPorts.length - 1, 1);
-      const y = rightPorts.length === 1
-        ? NODE_HEIGHT / 2
-        : PORT_PADDING + idx * spacing;
-      positions.set(port.id, y);
-    });
-
-    return positions;
-  }, [data]);
+  const childCount = isCluster
+    ? (data.cluster.componentCount > 6 ? data.cluster.componentCount : 0)
+    : 0;
 
   return (
     <div
@@ -79,43 +45,24 @@ function ArchitectureNodeComponent({ id, data }: NodeProps<ArchitectureNodeData>
         } as CSSProperties
       }
     >
-      {isCluster ? null : data.component.ports.map((port) => {
-        const handleId = `port:${data.component.id}:${port.id}`;
-        const isIn = port.direction === "in";
-        const isOut = port.direction === "out";
-        const isInOut = port.direction === "inout";
-        const yPos = portPositions.get(port.id) ?? NODE_HEIGHT / 2;
-
-        const handles: React.ReactElement[] = [];
-
-        if (isIn || isInOut) {
-          handles.push(
-            <Handle
-              key={`in:${handleId}`}
-              className="!h-2.5 !w-2.5 !border-0 !bg-slate-400 hover:!bg-cyan-400"
-              id={handleId}
-              type="target"
-              position={Position.Left}
-              style={{ top: `${yPos}px` }}
-            />
-          );
-        }
-
-        if (isOut || isInOut) {
-          handles.push(
-            <Handle
-              key={`out:${handleId}`}
-              className="!h-2.5 !w-2.5 !border-0 !bg-slate-400 hover:!bg-cyan-400"
-              id={handleId}
-              type="source"
-              position={Position.Right}
-              style={{ top: `${yPos}px` }}
-            />
-          );
-        }
-
-        return handles;
-      })}
+      {!isCluster && (
+        <>
+          <Handle
+            className="!h-3 !w-1 !rounded-full !border-0 !bg-slate-500 hover:!bg-cyan-400"
+            id={`left:${id}`}
+            type="target"
+            position={Position.Left}
+            style={{ top: "50%" }}
+          />
+          <Handle
+            className="!h-3 !w-1 !rounded-full !border-0 !bg-slate-500 hover:!bg-cyan-400"
+            id={`right:${id}`}
+            type="source"
+            position={Position.Right}
+            style={{ top: "50%" }}
+          />
+        </>
+      )}
       <div className="flex">
         <div
           className={clsx("architecture-node__rail w-1.5 shrink-0", depth > 0 && "opacity-80")}
@@ -139,12 +86,18 @@ function ArchitectureNodeComponent({ id, data }: NodeProps<ArchitectureNodeData>
                   <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                     <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
                   </svg>
-                  <span>Inside {parentGroupName}</span>
+                  <span>{parentGroupName}</span>
                 </div>
               )}
-              <div className="architecture-node__meta mt-3 grid grid-cols-2 gap-2 text-[11px] text-slate-400">
-                <span className="rounded bg-white/[0.04] px-2 py-1">{data.cluster.componentCount} blocks</span>
-                <span className="rounded bg-white/[0.04] px-2 py-1">{data.cluster.connectionCount} links</span>
+              <div className="architecture-node__meta mt-3 flex items-center gap-2 text-[11px] text-slate-400">
+                <span className="rounded bg-white/[0.04] px-2 py-1">
+                  {data.cluster.componentCount} blocks
+                </span>
+                {childCount > 0 && (
+                  <span className="rounded bg-cyan-500/10 px-2 py-1 text-cyan-400">
+                    click to expand
+                  </span>
+                )}
               </div>
               {data.cluster.typeBreakdown && Object.keys(data.cluster.typeBreakdown).length > 1 && (
                 <div className="mt-2 flex flex-wrap gap-1">
@@ -164,6 +117,7 @@ function ArchitectureNodeComponent({ id, data }: NodeProps<ArchitectureNodeData>
 }
 
 export const ArchitectureNode = memo(ArchitectureNodeComponent, (previous, next) => {
+  if (previous.data.kind === "busChannel" || next.data.kind === "busChannel") return false;
   return (
     previous.id === next.id &&
     previous.selected === next.selected &&

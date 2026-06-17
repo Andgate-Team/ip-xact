@@ -1,10 +1,9 @@
 import type { ArchitectureModel, Component, ComponentType, Connection } from "../../types";
 import type { HierarchyNode } from "../../types";
 
-const HIERARCHY_CLUSTER_THRESHOLD = 12;
-const MAX_SUBGROUP_SIZE = 20;
+const EXPAND_THRESHOLD = 6;
 
-const TYPE_GROUP_ORDER: ComponentType[] = ["cpu", "bus", "memory", "peripheral", "interface", "clockReset", "custom"];
+const TYPE_GROUP_ORDER: ComponentType[] = ["cpu", "bus", "memory", "peripheral", "interface", "clockReset", "custom", "dma", "interruptController", "debug"];
 
 const TYPE_LABELS: Record<ComponentType, string> = {
   cpu: "CPU",
@@ -13,8 +12,13 @@ const TYPE_LABELS: Record<ComponentType, string> = {
   peripheral: "Peripheral",
   interface: "Interface",
   clockReset: "Clock/Reset",
-  custom: "Custom"
+  custom: "Custom",
+  dma: "DMA",
+  interruptController: "Interrupt Controller",
+  debug: "Debug"
 };
+
+const NUMERIC_SUFFIX = /\d+$/;
 
 function computeTypeBreakdown(components: Component[]): Partial<Record<ComponentType, number>> {
   const breakdown: Partial<Record<ComponentType, number>> = {};
@@ -31,28 +35,10 @@ function computeConnectionCount(components: Component[], connections: Connection
   ).length;
 }
 
-function getPrimaryAnchorId(
-  componentId: string,
-  connections: Connection[],
-  candidateIds: Set<string>,
-  degree: Map<string, number>
-): string {
-  const candidates = new Set<string>();
-
-  for (const connection of connections) {
-    if (connection.sourceComponentId === componentId && candidateIds.has(connection.targetComponentId)) {
-      candidates.add(connection.targetComponentId);
-    }
-    if (connection.targetComponentId === componentId && candidateIds.has(connection.sourceComponentId)) {
-      candidates.add(connection.sourceComponentId);
-    }
-  }
-
-  if (candidates.size === 0) {
-    return "unconnected";
-  }
-
-  return [...candidates].sort((a, b) => (degree.get(b) ?? 0) - (degree.get(a) ?? 0))[0] ?? "unconnected";
+function extractBasePrefix(name: string): string {
+  const stripped = name.replace(NUMERIC_SUFFIX, "").trim();
+  const parts = stripped.split(/[\s_\-]+/);
+  return parts[parts.length - 1] ?? stripped;
 }
 
 function groupByType(components: Component[]): Map<ComponentType, Component[]> {
@@ -68,71 +54,103 @@ function groupByType(components: Component[]): Map<ComponentType, Component[]> {
   return groups;
 }
 
-function groupByPrimaryAnchor(
-  components: Component[],
-  connections: Connection[],
-  degree: Map<string, number>
-): Map<string, Component[]> {
-  const componentIds = new Set(components.map((c) => c.id));
+function groupByPrefix(components: Component[]): Map<string, Component[]> {
   const groups = new Map<string, Component[]>();
-
   for (const comp of components) {
-    const anchorId = getPrimaryAnchorId(comp.id, connections, componentIds, degree);
-    const existing = groups.get(anchorId);
+    const prefix = extractBasePrefix(comp.name);
+    const existing = groups.get(prefix);
     if (existing) {
       existing.push(comp);
     } else {
-      groups.set(anchorId, [comp]);
+      groups.set(prefix, [comp]);
     }
   }
-
   return groups;
 }
 
-function subGroupByAnchor(
-  typeGroup: HierarchyNode,
-  type: ComponentType,
+function splitIntoChunks(components: Component[], chunkSize: number): Component[][] {
+  const chunks: Component[][] = [];
+  for (let i = 0; i < components.length; i += chunkSize) {
+    chunks.push(components.slice(i, i + chunkSize));
+  }
+  return chunks;
+}
+
+function buildSubGroups(
   components: Component[],
   connections: Connection[],
-  degree: Map<string, number>,
-  componentById: Map<string, Component>
-): void {
-  const byAnchor = groupByPrimaryAnchor(components, connections, degree);
+  depth: number,
+  parentPath: string
+): HierarchyNode[] {
+  if (components.length <= EXPAND_THRESHOLD) {
+    return [];
+  }
 
-  for (const [anchorId, members] of byAnchor) {
-    const ordered = [...members].sort((a, b) => (degree.get(b.id) ?? 0) - (degree.get(a.id) ?? 0));
-    const anchorName = componentById.get(anchorId)?.name;
+  const byPrefix = groupByPrefix(components);
+  const prefixes = [...byPrefix.keys()].sort();
 
-    for (let start = 0; start < ordered.length; start += MAX_SUBGROUP_SIZE) {
-      const bucket = ordered.slice(start, start + MAX_SUBGROUP_SIZE);
-      const bucketIndex = Math.floor(start / MAX_SUBGROUP_SIZE);
-      const subgroupName = anchorName
-        ? `${TYPE_LABELS[type]} near ${anchorName}${bucketIndex > 0 ? ` (${bucketIndex + 1})` : ""}`
-        : `${TYPE_LABELS[type]} group${bucketIndex > 0 ? ` (${bucketIndex + 1})` : ""}`;
+  if (prefixes.length >= 2 && components.length > EXPAND_THRESHOLD * 2) {
+    const groups: HierarchyNode[] = [];
+    for (const prefix of prefixes) {
+      const members = byPrefix.get(prefix)!;
+      if (members.length === 0) continue;
 
-      typeGroup.childGroups.push({
-        id: `hierarchy:${type}:${anchorId}:${bucketIndex}`,
-        name: subgroupName,
-        type: "group",
-        depth: 2,
-        componentIds: bucket.map((c) => c.id),
-        childGroups: [],
+      const groupId = `${parentPath}:${prefix.toLowerCase()}`;
+      const hasChildren = members.length > EXPAND_THRESHOLD;
+
+      groups.push({
+        id: groupId,
+        name: members.length > 1 ? `${prefix} (${members.length})` : members[0]?.name ?? prefix,
+        type: members[0]?.type ?? "custom",
+        depth,
+        componentIds: members.map((c) => c.id),
+        childGroups: hasChildren ? buildSubGroups(members, connections, depth + 1, groupId) : [],
         metadata: {
-          componentCount: bucket.length,
-          connectionCount: computeConnectionCount(bucket, connections),
-          typeBreakdown: computeTypeBreakdown(bucket)
+          componentCount: members.length,
+          connectionCount: computeConnectionCount(members, connections),
+          typeBreakdown: computeTypeBreakdown(members)
         }
       });
     }
+    return groups;
   }
+
+  const chunkSize = Math.max(EXPAND_THRESHOLD, Math.ceil(components.length / 4));
+  const chunks = splitIntoChunks(components, chunkSize);
+  const groups: HierarchyNode[] = [];
+
+  for (let i = 0; i < chunks.length; i++) {
+    const chunk = chunks[i];
+    if (!chunk || chunk.length === 0) continue;
+
+    const groupId = `${parentPath}:part${i}`;
+    const hasChildren = chunk.length > EXPAND_THRESHOLD;
+    const firstName = chunk[0]?.name ?? `Part ${i + 1}`;
+    const lastName = chunk[chunk.length - 1]?.name ?? firstName;
+    const label = chunk.length > 2 ? `${firstName}..${lastName}` : firstName;
+
+    groups.push({
+      id: groupId,
+      name: `${label} (${chunk.length})`,
+      type: chunk[0]?.type ?? "custom",
+      depth,
+      componentIds: chunk.map((c) => c.id),
+      childGroups: hasChildren ? buildSubGroups(chunk, connections, depth + 1, groupId) : [],
+      metadata: {
+        componentCount: chunk.length,
+        connectionCount: computeConnectionCount(chunk, connections),
+        typeBreakdown: computeTypeBreakdown(chunk)
+      }
+    });
+  }
+
+  return groups;
 }
 
 export function buildHierarchy(
   model: ArchitectureModel,
   degree: Map<string, number>
 ): HierarchyNode {
-  const componentById = new Map(model.components.map((c) => [c.id, c]));
-
   const root: HierarchyNode = {
     id: "root",
     name: "Architecture",
@@ -153,23 +171,22 @@ export function buildHierarchy(
     const members = byType.get(type);
     if (!members || members.length === 0) continue;
 
+    const typeGroupId = `hierarchy:${type}`;
+    const needsSubGroups = members.length > EXPAND_THRESHOLD;
+
     const typeNode: HierarchyNode = {
-      id: `hierarchy:${type}`,
+      id: typeGroupId,
       name: `${TYPE_LABELS[type]} (${members.length})`,
       type,
       depth: 1,
       componentIds: members.map((c) => c.id),
-      childGroups: [],
+      childGroups: needsSubGroups ? buildSubGroups(members, model.connections, 2, typeGroupId) : [],
       metadata: {
         componentCount: members.length,
         connectionCount: computeConnectionCount(members, model.connections),
         typeBreakdown: computeTypeBreakdown(members)
       }
     };
-
-    if (members.length > HIERARCHY_CLUSTER_THRESHOLD) {
-      subGroupByAnchor(typeNode, type, members, model.connections, degree, componentById);
-    }
 
     root.childGroups.push(typeNode);
   }

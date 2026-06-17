@@ -7,7 +7,10 @@ const typeIcon: Record<ComponentType, string> = {
   peripheral: "I/O",
   interface: "PAD",
   clockReset: "CLK",
-  custom: "IP"
+  custom: "IP",
+  dma: "DMA",
+  interruptController: "INT",
+  debug: "DBG"
 };
 
 interface NodeHeaderProps {

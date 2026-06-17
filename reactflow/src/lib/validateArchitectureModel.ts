@@ -7,7 +7,10 @@ const componentTypes = new Set<ComponentType>([
   "peripheral",
   "interface",
   "clockReset",
-  "custom"
+  "custom",
+  "dma",
+  "interruptController",
+  "debug"
 ]);
 
 const portDirections = new Set<PortDirection>(["in", "out", "inout"]);
@@ -46,6 +49,18 @@ function inferComponentType(name: string, rawType: string): ComponentType {
 
   if (type === "clockreset" || type === "clock_reset" || componentName.includes("clock") || componentName.includes("reset")) {
     return "clockReset";
+  }
+
+  if (type === "dma" || componentName.includes("dma")) {
+    return "dma";
+  }
+
+  if (type === "interruptcontroller" || type === "interrupt_controller" || componentName.includes("interrupt") || componentName.includes("intc") || componentName.includes("nvic") || componentName.includes("vic") || componentName.includes("gic")) {
+    return "interruptController";
+  }
+
+  if (type === "debug" || componentName.includes("debug") || componentName.includes("jtag") || componentName.includes("tap")) {
+    return "debug";
   }
 
   if (type === "peripheral" || type === "component") {

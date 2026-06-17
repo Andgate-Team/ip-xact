@@ -1,100 +1,85 @@
 import type { ElkExtendedEdge, ElkNode } from "elkjs";
 import type { ArchitectureFlowEdge, ArchitectureFlowNode } from "../../types";
+import type { ELKLayoutHints } from "../preprocess/types";
 
 const COLLAPSED_NODE_WIDTH = 220;
 const COLLAPSED_NODE_HEIGHT = 88;
 const CLUSTER_NODE_WIDTH = 280;
 const CLUSTER_NODE_HEIGHT = 118;
-const PORT_PADDING = 12;
+const BUS_CHANNEL_WIDTH = 32;
+const BUS_CHANNEL_HEIGHT = 720;
 
-function calculatePortY(
-  ports: { id: string; direction: string }[],
-  portId: string,
-  side: "LEFT" | "RIGHT"
-): number {
-  const sidePorts = ports.filter((p) => {
-    if (side === "LEFT") return p.direction === "in" || p.direction === "inout";
-    return p.direction === "out" || p.direction === "inout";
-  });
-
-  const idx = sidePorts.findIndex((p) => p.id === portId);
-  if (idx === -1) return COLLAPSED_NODE_HEIGHT / 2;
-
-  const spacing = (COLLAPSED_NODE_HEIGHT - PORT_PADDING * 2) / Math.max(sidePorts.length - 1, 1);
-  return sidePorts.length === 1
-    ? COLLAPSED_NODE_HEIGHT / 2
-    : PORT_PADDING + idx * spacing;
-}
-
-export function flowToElkGraph(nodes: ArchitectureFlowNode[], edges: ArchitectureFlowEdge[]): ElkNode {
+export function flowToElkGraph(
+  nodes: ArchitectureFlowNode[],
+  edges: ArchitectureFlowEdge[],
+  elkHints?: ELKLayoutHints
+): ElkNode {
   const nodeCount = nodes.length;
   const placementStrategy = nodeCount > 500 ? "NETWORK_SIMPLEX" : "INTERACTIVE";
 
+  const baseOptions: Record<string, string> = {
+    "elk.algorithm": "layered",
+    "elk.direction": "RIGHT",
+    "elk.spacing.nodeNode": "48",
+    "elk.spacing.edgeEdge": "16",
+    "elk.spacing.edgeNode": "24",
+    "elk.layered.spacing.nodeNodeBetweenLayers": "80",
+    "elk.layered.nodePlacement.strategy": placementStrategy,
+    "elk.layered.nodePlacement.bk.edgeStraightening": "true",
+    "elk.layered.crossingMinimization.strategy": "LAYER_SWEEP",
+    "elk.layered.crossingMinimization.greedySwitch": "true",
+    "elk.layered.crossingMinimization.iterations": "30",
+    "elk.layered.mergeEdges": "true",
+    "elk.layered.mergeNodes": "true",
+    "elk.layered.wrapping.strategy": "OFF",
+    "elk.layered.nodeLayering": "NETWORK_SIMPLEX",
+    "elk.edgeRouting": "ORTHOGONAL",
+    "org.eclipse.elk.portConstraints": "FIXED_ORDER"
+  };
+
+  if (elkHints?.elkOptions) {
+    Object.assign(baseOptions, elkHints.elkOptions);
+  }
+
   return {
     id: "root",
-    layoutOptions: {
-      "elk.algorithm": "layered",
-      "elk.direction": "RIGHT",
-      "elk.spacing.nodeNode": "64",
-      "elk.spacing.edgeEdge": "20",
-      "elk.spacing.edgeNode": "28",
-      "elk.layered.spacing.nodeNodeBetweenLayers": "110",
-      "elk.layered.nodePlacement.strategy": placementStrategy,
-      "elk.layered.nodePlacement.bk.edgeStraightening": "true",
-      "elk.layered.crossingMinimization.strategy": "LAYER_SWEEP",
-      "elk.layered.crossingMinimization.greedySwitch": "true",
-      "elk.layered.crossingMinimization.iterations": "25",
-      "elk.layered.mergeEdges": "true",
-      "elk.layered.mergeNodes": "true",
-      "elk.layered.wrapping.strategy": "OFF",
-      "elk.layered.nodeLayering": "NETWORK_SIMPLEX",
-      "elk.edgeRouting": "ORTHOGONAL",
-      "org.eclipse.elk.portConstraints": "FIXED_ORDER"
-    },
+    layoutOptions: baseOptions,
     children: nodes.map((node) => {
+      const isBusChannel = node.data.kind === "busChannel";
       const isCluster = node.data.kind === "cluster";
 
-      const ports = !isCluster && node.data.kind === "component"
-        ? node.data.component.ports.map((port) => {
-            const id = `port:${node.id}:${port.id}`;
-            const side = port.direction === "out" ? "RIGHT" : "LEFT";
-            const allPorts = node.data.kind === "component" ? node.data.component.ports : [];
-            const y = calculatePortY(allPorts, port.id, side);
-            return {
-              id,
-              side,
-              x: side === "LEFT" ? 0 : COLLAPSED_NODE_WIDTH,
-              y
-            };
-          })
-        : [];
+      let width = COLLAPSED_NODE_WIDTH;
+      let height = COLLAPSED_NODE_HEIGHT;
+
+      if (isBusChannel) {
+        width = BUS_CHANNEL_WIDTH;
+        height = BUS_CHANNEL_HEIGHT;
+      } else if (isCluster) {
+        width = CLUSTER_NODE_WIDTH;
+        height = CLUSTER_NODE_HEIGHT;
+      }
+
+      const ports = [];
+
+      if (!isCluster) {
+        ports.push(
+          { id: `left:${node.id}`, side: "LEFT" as const, x: 0, y: height / 2 },
+          { id: `right:${node.id}`, side: "RIGHT" as const, x: width, y: height / 2 }
+        );
+      }
 
       return {
         id: node.id,
-        width: isCluster ? CLUSTER_NODE_WIDTH : COLLAPSED_NODE_WIDTH,
-        height: isCluster ? CLUSTER_NODE_HEIGHT : COLLAPSED_NODE_HEIGHT,
+        width,
+        height,
         ...(ports.length ? { ports } : {})
       };
     }),
     edges: edges.map((edge): ElkExtendedEdge => {
-      const connection = edge.data?.connection;
-      const sourcePort = connection?.sourcePortId;
-      const targetPort = connection?.targetPortId;
-
       return {
         id: edge.id,
-        sources: [
-          {
-            id: edge.source,
-            port: `port:${edge.source}:${sourcePort ?? ""}`
-          }
-        ],
-        targets: [
-          {
-            id: edge.target,
-            port: `port:${edge.target}:${targetPort ?? ""}`
-          }
-        ]
+        sources: [{ id: edge.source, port: `right:${edge.source}` }],
+        targets: [{ id: edge.target, port: `left:${edge.target}` }]
       } as any;
     })
   };

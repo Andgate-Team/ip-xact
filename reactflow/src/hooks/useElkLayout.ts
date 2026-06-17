@@ -1,7 +1,8 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import type { ElkNode } from "elkjs";
 import { flowToElkGraph } from "../lib/elk/elkAdapter";
 import { getCachedLayout, getLayoutCacheKey, setCachedLayout } from "../lib/elk/layoutCache";
+import { preprocessArchitecture, type PreprocessedArchitecture } from "../lib/preprocess";
 import { modelToFlow } from "../lib/transform/modelToFlow";
 import { useArchitectureStore } from "../store/architectureStore";
 import { useGraphStore } from "../store/graphStore";
@@ -55,13 +56,17 @@ export function useElkLayout(): void {
   const setLayoutLoading = useGraphStore((state) => state.setLayoutLoading);
   const expandedClusterIds = useGraphStore((state) => state.expandedClusterIds);
   const expansionPath = useGraphStore((state) => state.expansionPath);
+  const preprocessedRef = useRef<PreprocessedArchitecture | null>(null);
 
   useEffect(() => {
     if (!model) {
       return;
     }
 
-    const { nodes, edges } = modelToFlow(model, expandedClusterIds);
+    const preprocessed = preprocessArchitecture(model);
+    preprocessedRef.current = preprocessed;
+
+    const { nodes, edges } = modelToFlow(model, expandedClusterIds, preprocessed);
     setNodes(nodes);
     setEdges(edges);
 
@@ -89,7 +94,10 @@ export function useElkLayout(): void {
       setLayoutLoading(false);
       worker.terminate();
     };
-    worker.postMessage({ graph: flowToElkGraph(nodes, edges) });
+    worker.postMessage({
+      graph: flowToElkGraph(nodes, edges, preprocessed.elkHints),
+      elkHints: preprocessed.elkHints
+    });
 
     return () => {
       setLayoutLoading(false);

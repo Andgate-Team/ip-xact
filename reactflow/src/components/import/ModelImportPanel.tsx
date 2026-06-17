@@ -13,26 +13,35 @@ export function ModelImportPanel() {
   const loadModel = useArchitectureStore((state) => state.loadModel);
   const setNodes = useGraphStore((state) => state.setNodes);
   const setEdges = useGraphStore((state) => state.setEdges);
+  const setLayoutLoading = useGraphStore((state) => state.setLayoutLoading);
   const selectNode = useSelectionStore((state) => state.selectNode);
   const setSearchQuery = useSelectionStore((state) => state.setSearchQuery);
   const [text, setText] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [isParsing, setIsParsing] = useState(false);
 
   const loadParsedModel = (model: ArchitectureModel) => {
     selectNode(null);
     setSearchQuery("");
     setNodes([]);
     setEdges([]);
+    setLayoutLoading(true);
     loadModel(model);
     setError(null);
   };
 
   const handleLoadText = () => {
-    try {
-      loadParsedModel(parseArchitectureModel(text));
-    } catch (parseError) {
-      setError(parseError instanceof Error ? parseError.message : "Unable to parse architecture JSON.");
-    }
+    setIsParsing(true);
+    setTimeout(() => {
+      try {
+        loadParsedModel(parseArchitectureModel(text));
+      } catch (parseError) {
+        setError(parseError instanceof Error ? parseError.message : "Unable to parse architecture JSON.");
+        setLayoutLoading(false);
+      } finally {
+        setIsParsing(false);
+      }
+    }, 50);
   };
 
   const handleFileChange = async (event: ChangeEvent<HTMLInputElement>) => {
@@ -41,12 +50,16 @@ export function ModelImportPanel() {
       return;
     }
 
+    setIsParsing(true);
     try {
       const contents = await file.text();
       setText(contents);
       loadParsedModel(parseArchitectureModel(contents));
     } catch (fileError) {
       setError(fileError instanceof Error ? fileError.message : "Unable to read architecture JSON file.");
+      setLayoutLoading(false);
+    } finally {
+      setIsParsing(false);
     }
   };
 
@@ -63,14 +76,18 @@ export function ModelImportPanel() {
         <div className="grid gap-4 p-5">
           <div className="flex flex-wrap items-center gap-3">
             <label className="inline-flex cursor-pointer items-center rounded-md border border-cyan-300/30 bg-cyan-300/10 px-3 py-2 text-sm font-semibold text-cyan-100 transition hover:bg-cyan-300/15">
-              Choose JSON file
+              {isParsing ? "Reading file..." : "Choose JSON file"}
               <input accept="application/json,.json" className="sr-only" onChange={handleFileChange} type="file" />
             </label>
             <button
               className="rounded-md border border-white/10 bg-white/5 px-3 py-2 text-sm font-semibold text-slate-200 transition hover:bg-white/10"
               onClick={() => {
-                setText(sampleText);
-                loadParsedModel(parseArchitectureModel(sampleText));
+                setIsParsing(true);
+                setTimeout(() => {
+                  setText(sampleText);
+                  loadParsedModel(parseArchitectureModel(sampleText));
+                  setIsParsing(false);
+                }, 50);
               }}
               type="button"
             >
@@ -91,11 +108,11 @@ export function ModelImportPanel() {
           <div className="flex justify-end">
             <button
               className="rounded-md bg-cyan-300 px-4 py-2 text-sm font-bold text-slate-950 transition hover:bg-cyan-200 disabled:cursor-not-allowed disabled:opacity-40"
-              disabled={!text.trim()}
+              disabled={!text.trim() || isParsing}
               onClick={handleLoadText}
               type="button"
             >
-              Render graph
+              {isParsing ? "Processing..." : "Render graph"}
             </button>
           </div>
         </div>
