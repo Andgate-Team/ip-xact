@@ -7,17 +7,15 @@ import type {
   ArchitectureModel,
   Component,
   ComponentType,
-  Connection
+  Connection,
+  HierarchyNode
 } from "../../types";
+import { buildHierarchy, findHierarchyNode, getDescendantIds } from "../clustering/hierarchyBuilder";
 
 const NODE_X_SPACING = 320;
 const NODE_Y_SPACING = 220;
 const MIN_COLUMNS = 3;
 const MAX_COLUMNS = 64;
-const CLUSTER_THRESHOLD = 220;
-const MAX_VISIBLE_ANCHORS = 120;
-const MAX_CLUSTER_SIZE = 80;
-const ANCHOR_TYPES = new Set<ComponentType>(["cpu", "bus", "memory", "clockReset"]);
 
 function getFallbackColumnCount(nodeCount: number): number {
   if (nodeCount <= MIN_COLUMNS) {
@@ -38,130 +36,6 @@ function getDegreeMap(model: ArchitectureModel): Map<string, number> {
   return degree;
 }
 
-function getAnchorIds(model: ArchitectureModel, degree: Map<string, number>): Set<string> {
-  const anchors = new Set(
-    model.components.filter((component) => ANCHOR_TYPES.has(component.type)).map((component) => component.id)
-  );
-
-  const ranked = [...model.components].sort((left, right) => (degree.get(right.id) ?? 0) - (degree.get(left.id) ?? 0));
-
-  for (const component of ranked) {
-    if (anchors.size >= MAX_VISIBLE_ANCHORS) {
-      break;
-    }
-
-    if ((degree.get(component.id) ?? 0) > 0) {
-      anchors.add(component.id);
-    }
-  }
-
-  return anchors;
-}
-
-function getPrimaryAnchorId(componentId: string, connections: Connection[], anchors: Set<string>, degree: Map<string, number>): string {
-  const candidates = new Set<string>();
-
-  for (const connection of connections) {
-    if (connection.sourceComponentId === componentId && anchors.has(connection.targetComponentId)) {
-      candidates.add(connection.targetComponentId);
-    }
-    if (connection.targetComponentId === componentId && anchors.has(connection.sourceComponentId)) {
-      candidates.add(connection.sourceComponentId);
-    }
-  }
-
-  if (candidates.size === 0) {
-    return "unconnected";
-  }
-
-  return [...candidates].sort((left, right) => (degree.get(right) ?? 0) - (degree.get(left) ?? 0))[0] ?? "unconnected";
-}
-
-function makeClusterId(type: ComponentType, anchorId: string, bucketIndex: number): string {
-  return `cluster:${type}:${anchorId}:${bucketIndex}`;
-}
-
-function makeClusterName(type: ComponentType, anchorId: string, componentById: Map<string, Component>): string {
-  const anchorName = componentById.get(anchorId)?.name;
-  const typeLabel = type === "clockReset" ? "clock/reset" : type;
-  return anchorName ? `${typeLabel} near ${anchorName}` : `${typeLabel} group`;
-}
-
-function buildComponentClusterMap(
-  model: ArchitectureModel,
-  visibleComponentIds: Set<string>,
-  expandedClusterIds: Set<string>,
-  degree: Map<string, number>
-): {
-  componentToVisibleId: Map<string, string>;
-  clusters: ArchitectureCluster[];
-  expandedComponentIds: Set<string>;
-} {
-  const componentById = new Map(model.components.map((component) => [component.id, component]));
-  const grouped = new Map<string, Component[]>();
-
-  for (const component of model.components) {
-    if (visibleComponentIds.has(component.id)) {
-      continue;
-    }
-
-    const anchorId = getPrimaryAnchorId(component.id, model.connections, visibleComponentIds, degree);
-    const key = `${component.type}:${anchorId}`;
-    grouped.set(key, [...(grouped.get(key) ?? []), component]);
-  }
-
-  const componentToVisibleId = new Map<string, string>();
-  const clusters: ArchitectureCluster[] = [];
-  const expandedComponentIds = new Set<string>();
-
-  for (const component of model.components) {
-    if (visibleComponentIds.has(component.id)) {
-      componentToVisibleId.set(component.id, component.id);
-    }
-  }
-
-  for (const [key, components] of grouped) {
-    const [type, anchorId] = key.split(":") as [ComponentType, string];
-    const ordered = [...components].sort((left, right) => (degree.get(right.id) ?? 0) - (degree.get(left.id) ?? 0));
-
-    for (let start = 0; start < ordered.length; start += MAX_CLUSTER_SIZE) {
-      const bucket = ordered.slice(start, start + MAX_CLUSTER_SIZE);
-      const clusterId = makeClusterId(type, anchorId, Math.floor(start / MAX_CLUSTER_SIZE));
-      const expanded = expandedClusterIds.has(clusterId);
-
-      if (expanded) {
-        for (const component of bucket) {
-          componentToVisibleId.set(component.id, component.id);
-          expandedComponentIds.add(component.id);
-        }
-        continue;
-      }
-
-      const componentIds = bucket.map((component) => component.id);
-      const componentIdSet = new Set(componentIds);
-      const connectionCount = model.connections.filter(
-        (connection) => componentIdSet.has(connection.sourceComponentId) || componentIdSet.has(connection.targetComponentId)
-      ).length;
-
-      clusters.push({
-        id: clusterId,
-        name: makeClusterName(type, anchorId, componentById),
-        type,
-        componentIds,
-        componentCount: bucket.length,
-        connectionCount,
-        expanded
-      });
-
-      for (const component of bucket) {
-        componentToVisibleId.set(component.id, clusterId);
-      }
-    }
-  }
-
-  return { componentToVisibleId, clusters, expandedComponentIds };
-}
-
 function makeNode(component: Component, index: number, columnCount: number): ArchitectureFlowNode {
   return {
     id: component.id,
@@ -171,7 +45,11 @@ function makeNode(component: Component, index: number, columnCount: number): Arc
   };
 }
 
-function makeClusterNode(cluster: ArchitectureCluster, index: number, columnCount: number): ArchitectureFlowNode {
+function makeClusterNode(
+  cluster: ArchitectureCluster,
+  index: number,
+  columnCount: number
+): ArchitectureFlowNode {
   return {
     id: cluster.id,
     type: "architecture",
@@ -181,7 +59,6 @@ function makeClusterNode(cluster: ArchitectureCluster, index: number, columnCoun
 }
 
 function aggregateEdges(model: ArchitectureModel, componentToVisibleId: Map<string, string>): ArchitectureFlowEdge[] {
-  // Key must preserve which ports are connected, otherwise we can’t reference ports in ELK.
   const edgeByPortPair = new Map<
     string,
     { connection: Connection; count: number; source: string; target: string; sourcePortId: string; targetPortId: string }
@@ -220,7 +97,6 @@ function aggregateEdges(model: ArchitectureModel, componentToVisibleId: Map<stri
         : connection.id,
       source,
       target,
-      // Connect to the correct per-port handles.
       sourceHandle: `port:${source}:${connection.sourcePortId}`,
       targetHandle: `port:${target}:${connection.targetPortId}`,
       type: "architecture",
@@ -228,6 +104,73 @@ function aggregateEdges(model: ArchitectureModel, componentToVisibleId: Map<stri
       markerEnd: { type: MarkerType.ArrowClosed }
     };
   });
+}
+
+function walkHierarchy(
+  node: HierarchyNode,
+  expandedClusterIds: Set<string>,
+  model: ArchitectureModel,
+  componentById: Map<string, Component>,
+  componentToVisibleId: Map<string, string>
+): { visibleComponents: Component[]; clusters: ArchitectureCluster[] } {
+  const visibleComponents: Component[] = [];
+  const clusters: ArchitectureCluster[] = [];
+
+  if (node.childGroups.length === 0) {
+    for (const compId of node.componentIds) {
+      const comp = componentById.get(compId);
+      if (comp) {
+        visibleComponents.push(comp);
+        componentToVisibleId.set(compId, compId);
+      }
+    }
+    return { visibleComponents, clusters };
+  }
+
+  const isExpanded = expandedClusterIds.has(node.id);
+
+  if (isExpanded) {
+    for (const child of node.childGroups) {
+      const result = walkHierarchy(child, expandedClusterIds, model, componentById, componentToVisibleId);
+      visibleComponents.push(...result.visibleComponents);
+      clusters.push(...result.clusters);
+    }
+  } else {
+    const connectionCount = model.connections.filter(
+      (conn) =>
+        node.componentIds.includes(conn.sourceComponentId) ||
+        node.componentIds.includes(conn.targetComponentId)
+    ).length;
+
+    const typeBreakdown: Partial<Record<ComponentType, number>> = {};
+    for (const compId of node.componentIds) {
+      const comp = componentById.get(compId);
+      if (comp) {
+        typeBreakdown[comp.type] = (typeBreakdown[comp.type] ?? 0) + 1;
+      }
+    }
+
+    const cluster: ArchitectureCluster = {
+      id: node.id,
+      name: node.name,
+      type: node.type === "group" ? "custom" : node.type,
+      componentIds: node.componentIds,
+      componentCount: node.componentIds.length,
+      connectionCount,
+      expanded: false,
+      hierarchyPath: node.id.replace("hierarchy:", "").split(":"),
+      depth: node.depth,
+      typeBreakdown
+    };
+
+    clusters.push(cluster);
+
+    for (const compId of node.componentIds) {
+      componentToVisibleId.set(compId, node.id);
+    }
+  }
+
+  return { visibleComponents, clusters };
 }
 
 export function modelToFlow(model: ArchitectureModel, expandedClusterIds?: Set<string>): {
@@ -242,15 +185,20 @@ export function modelToFlow(
   edges: ArchitectureFlowEdge[];
 } {
   const degree = getDegreeMap(model);
-  const shouldCluster = model.components.length > CLUSTER_THRESHOLD;
-  const anchorIds = shouldCluster ? getAnchorIds(model, degree) : new Set(model.components.map((component) => component.id));
-  const { componentToVisibleId, clusters, expandedComponentIds } = buildComponentClusterMap(
-    model,
-    anchorIds,
-    expandedClusterIds ?? new Set<string>(),
-    degree
-  );
-  const visibleComponents = model.components.filter((component) => anchorIds.has(component.id) || expandedComponentIds.has(component.id));
+  const hierarchy = buildHierarchy(model, degree);
+  const componentById = new Map(model.components.map((component) => [component.id, component]));
+  const expandedSet = expandedClusterIds ?? new Set<string>();
+  const componentToVisibleId = new Map<string, string>();
+
+  const visibleComponents: Component[] = [];
+  const clusters: ArchitectureCluster[] = [];
+
+  for (const child of hierarchy.childGroups) {
+    const result = walkHierarchy(child, expandedSet, model, componentById, componentToVisibleId);
+    visibleComponents.push(...result.visibleComponents);
+    clusters.push(...result.clusters);
+  }
+
   const totalNodeCount = visibleComponents.length + clusters.length;
   const columnCount = getFallbackColumnCount(totalNodeCount);
 

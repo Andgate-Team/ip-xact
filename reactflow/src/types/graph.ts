@@ -1,9 +1,17 @@
 import type { Edge, Node } from "reactflow";
 import type { Component, ComponentType, Connection } from "./architecture";
 
+export interface PortPosition {
+  portId: string;
+  x: number;
+  y: number;
+  side: "LEFT" | "RIGHT" | "TOP" | "BOTTOM";
+}
+
 export interface ComponentNodeData {
   kind: "component";
   component: Component;
+  portPositions?: PortPosition[];
 }
 
 export interface ClusterNodeData {
@@ -19,6 +27,23 @@ export interface ArchitectureCluster {
   componentCount: number;
   connectionCount: number;
   expanded: boolean;
+  hierarchyPath: string[];
+  depth: number;
+  typeBreakdown?: Partial<Record<ComponentType, number>>;
+}
+
+export interface HierarchyNode {
+  id: string;
+  name: string;
+  type: ComponentType | "group";
+  depth: number;
+  componentIds: string[];
+  childGroups: HierarchyNode[];
+  metadata: {
+    componentCount: number;
+    connectionCount: number;
+    typeBreakdown: Partial<Record<ComponentType, number>>;
+  };
 }
 
 export type ArchitectureNodeData = ComponentNodeData | ClusterNodeData;

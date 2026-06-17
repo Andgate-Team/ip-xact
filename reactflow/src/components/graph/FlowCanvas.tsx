@@ -6,6 +6,7 @@ import { useGraphStore } from "../../store/graphStore";
 import { useSelectionStore } from "../../store/selectionStore";
 import type { ArchitectureEdgeData, ArchitectureNodeData } from "../../types";
 import { BackgroundGrid } from "./BackgroundGrid";
+import { LoadingSkeleton } from "./LoadingSkeleton";
 import { MiniMapPanel } from "./MiniMapPanel";
 import { edgeTypes } from "./edges/edgeTypeRegistry";
 import { nodeTypes } from "./nodes/nodeTypeRegistry";
@@ -26,6 +27,7 @@ function FlowCanvasInner() {
   const storeEdges = useGraphStore((state) => state.edges);
   const updateNodePosition = useGraphStore((state) => state.updateNodePosition);
   const toggleCluster = useGraphStore((state) => state.toggleCluster);
+  const isLayoutLoading = useGraphStore((state) => state.isLayoutLoading);
   const selectNode = useSelectionStore((state) => state.selectNode);
   const focusNode = useFitViewOnSelect();
   const [nodes, setNodes, onNodesChange] = useNodesState<ArchitectureNodeData>(storeNodes);
@@ -71,39 +73,42 @@ function FlowCanvasInner() {
   }, []);
 
   return (
-    <ReactFlow
-      className={isOverview ? "architecture-flow architecture-flow--overview" : "architecture-flow"}
-      nodes={nodes}
-      edges={edges}
-      nodeTypes={nodeTypes}
-      edgeTypes={edgeTypes}
-      defaultEdgeOptions={defaultEdgeOptions}
-      onNodesChange={onNodesChange}
-      onEdgesChange={onEdgesChange}
-      onNodeClick={handleNodeClick}
-      onNodeDoubleClick={handleNodeDoubleClick}
-      onNodeDragStop={handleNodeDragStop}
-      onMove={handleMove}
-      onPaneClick={() => selectNode(null)}
-      fitView
-      fitViewOptions={{ padding: 0.18, minZoom: MIN_ZOOM, maxZoom: 0.9 }}
-      onlyRenderVisibleElements
-      zoomOnDoubleClick={false}
-      minZoom={MIN_ZOOM}
-      maxZoom={MAX_ZOOM}
-      proOptions={{ hideAttribution: true }}
-    >
-      <svg>
-        <defs>
-          <marker id="architecture-arrow" markerHeight="12" markerWidth="12" orient="auto" refX="10" refY="6">
-            <path d="M2,2 L10,6 L2,10 z" fill="#67e8f9" />
-          </marker>
-        </defs>
-      </svg>
-      <BackgroundGrid />
-      <Controls className="!border !border-white/10 !bg-shell-950/90 !fill-slate-200 !text-slate-200" />
-      <MiniMapPanel />
-    </ReactFlow>
+    <div className="relative h-full w-full">
+      <ReactFlow
+        className={isOverview ? "architecture-flow architecture-flow--overview" : "architecture-flow"}
+        nodes={nodes}
+        edges={edges}
+        nodeTypes={nodeTypes}
+        edgeTypes={edgeTypes}
+        defaultEdgeOptions={defaultEdgeOptions}
+        onNodesChange={onNodesChange}
+        onEdgesChange={onEdgesChange}
+        onNodeClick={handleNodeClick}
+        onNodeDoubleClick={handleNodeDoubleClick}
+        onNodeDragStop={handleNodeDragStop}
+        onMove={handleMove}
+        onPaneClick={() => selectNode(null)}
+        fitView
+        fitViewOptions={{ padding: 0.18, minZoom: MIN_ZOOM, maxZoom: 0.9 }}
+        onlyRenderVisibleElements
+        zoomOnDoubleClick={false}
+        minZoom={MIN_ZOOM}
+        maxZoom={MAX_ZOOM}
+        proOptions={{ hideAttribution: true }}
+      >
+        <svg>
+          <defs>
+            <marker id="architecture-arrow" markerHeight="12" markerWidth="12" orient="auto" refX="10" refY="6">
+              <path d="M2,2 L10,6 L2,10 z" fill="#67e8f9" />
+            </marker>
+          </defs>
+        </svg>
+        <BackgroundGrid />
+        <Controls className="!border !border-white/10 !bg-shell-950/90 !fill-slate-200 !text-slate-200" />
+        <MiniMapPanel />
+      </ReactFlow>
+      {isLayoutLoading && <LoadingSkeleton />}
+    </div>
   );
 }
 

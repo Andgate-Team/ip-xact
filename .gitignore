@@ -1,3 +1,8 @@
 .venv
 .txt
 .vscode
+.mimocode
+.pdf
+.ipynb_checkpoints
+__pycache__
+*.pyc
