@@ -1,0 +1,453 @@
+PROJECT: ip-xact (Cytoscape.js variant)
+Hardware Architecture Explorer — Implementation Plan for AI Coding Agent
+=========================================================================
+
+NOTE ON THIS VARIANT
+----------------------
+This replaces the React Flow + standalone ELK.js plan with Cytoscape.js
+as the graph engine, per these confirmed decisions:
+  - Expanded nodes use NATIVE Cytoscape canvas styling (no HTML/DOM
+    overlay on the canvas) — simpler, but text-based rather than a rich
+    HTML card.
+  - Layout uses the cytoscape-elk extension, so ELK's hierarchical
+    "layered" algorithm is preserved.
+  - The app shell stays React + TypeScript + Zustand + TailwindCSS.
+    react-cytoscapejs is the bridge component between React and the
+    Cytoscape core instance.
+  - The DOMAIN input JSON (components/types/ports/registers/connections)
+    is UNCHANGED from the original plan. A dedicated adapter converts it
+    into Cytoscape's own element JSON format (the format Cytoscape
+    actually ingests) — see Section 5 and Section 7. Keep these two JSON
+    shapes separate; do not hand-author Cytoscape's format directly as
+    your source data.
+
+
+1. PROJECT OVERVIEW
+---------------------
+Build a modern Hardware Architecture Explorer web app named "ip-xact".
+
+Stack:
+- React + TypeScript (strict mode)
+- Cytoscape.js (core graph rendering engine, canvas-based)
+- react-cytoscapejs (React wrapper/bridge for the Cytoscape instance)
+- cytoscape-elk (extension wrapping elkjs, gives hierarchical layout)
+- TailwindCSS (styling for UI chrome: panels, search bar, toolbar, badges
+  — NOT for node visuals, since nodes are canvas-drawn via Cytoscape's
+  own stylesheet, not DOM/CSS)
+- Zustand (state management, split into multiple slices/stores)
+- Fuse.js (fuzzy search)
+- Vite (build tool)
+
+Input: same JSON architecture model as before — components, component
+types, ports, registers, directed connections.
+
+Output: an interactive, zoomable, searchable Cytoscape diagram of the
+architecture, dark-themed, supporting graphs with hundreds to thousands
+of nodes.
+
+
+2. PROJECT SETUP
+--------------------
+- Project folder / package name: ip-xact
+- Initialize with Vite + React + TypeScript template.
+- Install: cytoscape, react-cytoscapejs, cytoscape-elk, elkjs (peer
+  dependency of cytoscape-elk), zustand, fuse.js, tailwindcss, postcss,
+  autoprefixer, clsx.
+- Register the Cytoscape extension ONCE at app bootstrap, before any
+  `cy` instance is created — e.g. in a small src/lib/cytoscape/setup.ts
+  imported at the top of main.tsx:
+      import cytoscape from 'cytoscape';
+      import elk from 'cytoscape-elk';
+      cytoscape.use(elk);
+- Configure tsconfig with "strict": true,
+  "noUncheckedIndexedAccess": true.
+- Configure Tailwind with dark theme as default for all UI chrome.
+
+
+3. DIRECTORY STRUCTURE
+---------------------------
+ip-xact/
+  src/
+    types/
+      architecture.ts          -> raw JSON model types (unchanged)
+      cytoscapeElements.ts      -> CytoscapeNodeData / CytoscapeEdgeData
+                                    types (the library's required shape)
+      index.ts
+    data/
+      sample-architecture.json
+    lib/
+      cytoscape/
+        setup.ts                 -> cytoscape.use(elk) registration
+        cytoscapeAdapter.ts       -> architecture model -> Cytoscape
+                                      elements JSON (nodes[]/edges[])
+        elkLayoutConfig.ts        -> ELK layout options for cytoscape-elk
+        styleSheet.ts             -> full Cytoscape stylesheet (colors,
+                                      shapes, classes for highlight/dim/
+                                      expanded/hover)
+        instanceManager.ts        -> holds the live `cy` instance handle
+                                      and exposes imperative methods
+                                      (selectNode, expandNode, highlight,
+                                      focusNode, resetView)
+      transform/
+        colorMap.ts                -> component type -> color tokens
+                                      (single source of truth, feeds both
+                                      Tailwind badges AND the Cytoscape
+                                      stylesheet)
+        expandedLabel.ts            -> builds the multiline text block
+                                      shown inside an expanded node
+      search/
+        fuseConfig.ts
+    store/
+      architectureStore.ts        -> raw model + derived lookup maps
+      graphStore.ts                 -> element data + current layout name
+                                      (NOT the live cy instance itself —
+                                      that lives in instanceManager.ts,
+                                      see Section 6)
+      selectionStore.ts             -> selectedId, expandedId, highlight/
+                                      dim id sets
+      selectors.ts                   -> memoized cross-slice selectors
+    components/
+      graph/
+        CytoscapeCanvas.tsx          -> hosts <CytoscapeComponent>, wires
+                                      tap/mouseover events to store
+        GraphToolbar.tsx              -> zoom in/out, fit view, re-layout
+        MiniMapPanel.tsx               -> see Section 8 note on minimap
+      inspector/
+        InspectorPanel.tsx
+        InspectorSection.tsx
+        ConnectionList.tsx
+      search/
+        SearchBar.tsx
+        SearchResultsList.tsx
+      ui/
+        (generic primitives: Badge, Card, IconButton, Panel, etc.)
+    hooks/
+      useCytoscapeInstance.ts       -> mounts cy ref into instanceManager
+      useCytoscapeEvents.ts          -> binds tap/mouseover/mouseout to
+                                      store actions
+      useElkLayout.ts                 -> runs cytoscape-elk layout once
+                                      on load
+      useNodeHighlighting.ts          -> toggles highlighted/dimmed
+                                      classes via cy.batch()
+      useFitViewOnSelect.ts            -> cy.animate({fit, zoom, center})
+      useSearch.ts
+    styles/
+      tokens.css                      -> CSS variables for UI chrome only
+    App.tsx
+    main.tsx
+  tailwind.config.ts
+  tsconfig.json
+  vite.config.ts
+  package.json
+  README.md
+
+
+4. TYPE DEFINITIONS (Phase 1 — build first)
+-----------------------------------------------
+types/architecture.ts — UNCHANGED from the original plan:
+- ComponentType: "cpu" | "bus" | "memory" | "peripheral" | "interface" |
+  "clockReset" | "custom"
+- Port: { id, name, direction, width? }
+- Register: { id, name, address?, description? }
+- Component: { id, name, type: ComponentType, ports: Port[],
+  registers: Register[] }
+- Connection: { id, sourceComponentId, sourcePortId, targetComponentId,
+  targetPortId }
+- ArchitectureModel: { components: Component[], connections: Connection[] }
+
+types/cytoscapeElements.ts — NEW, defines the shape Cytoscape requires:
+- CytoscapeNodeData: { id: string, label: string, type: ComponentType,
+  isExpanded: boolean, expandedLabel: string } — `id` and structure here
+  follow Cytoscape's element JSON convention: { group: 'nodes', data: {...} }
+- CytoscapeEdgeData: { id: string, source: string, target: string,
+  sourcePortId: string, targetPortId: string } — Cytoscape edges require
+  `source`/`target` referencing node ids; element shape is
+  { group: 'edges', data: {...} }
+- Keep this file separate from architecture.ts — the same separation
+  principle as before: domain model vs. rendering-library shape.
+
+lib/transform/colorMap.ts — same color tokens as before, defined once
+and consumed two ways:
+  cpu          -> blue
+  bus          -> purple
+  memory       -> green
+  peripheral   -> orange
+  interface    -> cyan
+  clockReset   -> red
+  custom       -> gray
+Export both: (a) hex/Tailwind tokens for Inspector badges, and (b) a
+function `buildCytoscapeColorStyles(colorMap)` that generates the
+Cytoscape stylesheet selector rules for each type (Section 9). Use
+`satisfies Record<ComponentType, NodeColorTokens>` so adding a new type
+without updating the map is a compile error.
+
+lib/transform/expandedLabel.ts — builds the multiline text shown inside
+an expanded node (since there is no HTML card, the "box" layout from the
+original spec is approximated as canvas text), e.g. for UART:
+  UART
+  Component
+  ----------
+  Ports
+  • clk
+  • rst
+  • tx
+  • rx
+  ----------
+  Registers
+  • CTRL
+  • STATUS
+Precompute this string once per component when the model loads — do not
+rebuild it on every expand.
+
+
+5. SAMPLE DATA (Phase 1)
+----------------------------
+data/sample-architecture.json — UNCHANGED format and content guidance
+from the original plan (1 CPU, 1 system bus, 1-2 memory blocks, 2-3
+peripherals like UART/SPI/GPIO, 1 interface block, 1 clock/reset block,
+realistic register names). This is the domain JSON your app ingests;
+cytoscapeAdapter.ts (Section 7) converts it into Cytoscape's element
+JSON before it reaches the graph component.
+
+
+6. ZUSTAND STORE DESIGN (Phase 2)
+---------------------------------------
+Same three-store split as the original plan, with one structural change:
+
+a) architectureStore.ts — unchanged: holds ArchitectureModel plus
+   precomputed Map<componentId, Component>, Map<componentId,
+   Connection[]> incoming, Map<componentId, Connection[]> outgoing,
+   built once at load.
+
+b) graphStore.ts — holds Cytoscape ELEMENT DATA (the output of
+   cytoscapeAdapter.ts) and the current layout name. Does NOT hold the
+   live `cy` core instance — Cytoscape instances are imperative,
+   non-serializable objects and don't belong in reactive state.
+
+c) selectionStore.ts — same shape as before: selectedNodeId,
+   expandedNodeId, highlightedNodeIds (Set), dimmedNodeIds (Set),
+   highlightedEdgeIds (Set). Same single-expand-at-a-time rule enforced
+   inside the `expandNode(id)` action.
+
+NEW: lib/cytoscape/instanceManager.ts — a small singleton/context that
+holds the actual `cy` instance once CytoscapeCanvas mounts, and exposes
+imperative methods (selectNode, expandNode, highlightConnections,
+focusNode, resetView). Store actions in selectionStore should, after
+updating state, also call into instanceManager so the canvas reflects
+the change — since Cytoscape needs direct `cy.batch()` calls to update
+many elements efficiently, not a React re-render pass.
+
+Rule (unchanged): components subscribe via narrow Zustand selectors,
+never the whole store object.
+
+
+7. JSON INGESTION — DOMAIN MODEL TO CYTOSCAPE ELEMENTS (Phase 2/3)
+-----------------------------------------------------------------------
+lib/cytoscape/cytoscapeAdapter.ts — pure function:
+  (model: ArchitectureModel) => { nodes: CytoscapeNodeElement[],
+                                    edges: CytoscapeEdgeElement[] }
+- For each Component, emit a node element:
+    { group: 'nodes', data: { id, label: name, type,
+      isExpanded: false, expandedLabel: <precomputed text> } }
+- For each Connection, emit an edge element:
+    { group: 'edges', data: { id, source: sourceComponentId,
+      target: targetComponentId, sourcePortId, targetPortId } }
+- This is the function that "ingests" the domain JSON and produces what
+  Cytoscape actually consumes. Run it once when the model loads; do not
+  re-run on every render.
+- The resulting elements array is what gets passed into
+  <CytoscapeComponent elements={...} stylesheet={...} /> on initial
+  mount only (see Section 8 for why subsequent updates are imperative).
+
+
+8. GRAPH RENDERING (Phase 4)
+----------------------------------
+- components/graph/CytoscapeCanvas.tsx hosts react-cytoscapejs's
+  <CytoscapeComponent>, passing `elements` and `stylesheet` props ONCE
+  on initial mount.
+- IMPORTANT: react-cytoscapejs does not efficiently diff large element
+  arrays on every prop change. After initial mount, capture the live
+  `cy` instance via the `cy={(cyInstance) => {...}}` callback prop, hand
+  it to instanceManager, and perform ALL subsequent mutations
+  imperatively: cy.add(), cy.remove(), node.data(...), node.addClass(),
+  cy.batch(...). Do not re-pass a changed `elements` prop as the update
+  mechanism.
+- Built-in vs. missing features (Cytoscape core differs from React Flow
+  here — plan for these explicitly):
+  - Zoom/pan: native to Cytoscape core, enabled by default.
+  - Fit view: call cy.fit() from a toolbar button (GraphToolbar.tsx).
+  - Minimap: NOT built into Cytoscape core. Either add the
+    `cytoscape-navigator` extension, or build a lightweight custom
+    minimap (a small secondary read-only `cy` instance mirroring node
+    positions, or a static canvas thumbnail). Decide which before
+    starting Section 8 work — navigator extension is the faster path.
+  - Background grid: NOT a Cytoscape feature. Achieve it with a plain
+    CSS background pattern on the container div sitting behind the
+    canvas (pure Tailwind/CSS, unrelated to Cytoscape), or use the
+    `cytoscape-grid-guide` extension if snapping/grid lines tied to
+    layout are wanted.
+
+
+9. NODE DESIGN — COLLAPSED STATE (Phase 4)
+------------------------------------------------
+Defined entirely in lib/cytoscape/styleSheet.ts as Cytoscape style rules
+(selector-based, similar shape to CSS but Cytoscape's own property set):
+- Shape: 'shape': 'round-rectangle' for a card-like silhouette.
+- Color-coding by type via selectors like:
+    { selector: 'node[type = "cpu"]',
+      style: { 'background-color': colorMap.cpu.base,
+               'border-color': colorMap.cpu.border } }
+  generated programmatically from colorMap.ts (Section 4) for all seven
+  types — single source of truth, no hand-duplicated colors.
+- Icon: Cytoscape supports `background-image` on nodes (SVG/PNG/data
+  URI), positioned via `background-position-x/y` and sized via
+  `background-width/height`; pair with a text label positioned below or
+  beside it via `text-margin-y`/`text-halign`.
+- Label: component name, via `label: 'data(label)'`.
+- Hover/selection feedback: Cytoscape canvas nodes don't support CSS
+  box-shadow, so approximate "hover glow" using a thicker/brighter
+  `border-width`/`border-color` on a `.hovered` class (toggled via
+  `mouseover`/`mouseout` events in useCytoscapeEvents.ts), combined with
+  Cytoscape's built-in style transitions:
+    'transition-property': 'border-width, border-color, background-color',
+    'transition-duration': '150ms'
+  This is the closest native equivalent to a smooth hover animation.
+
+
+10. NODE DESIGN — EXPANDED STATE (Phase 4)
+-------------------------------------------------
+- Single-expand-at-a-time rule unchanged: expanding a node auto-collapses
+  whichever node was previously expanded (enforced in selectionStore).
+- On expand: set the node's `isExpanded` data flag and apply an
+  `.expanded` class. The `.expanded` style rule increases width/height,
+  sets `text-wrap: 'wrap'`, `text-valign: 'top'`, `text-halign: 'center'`,
+  adds padding, and points the label at the precomputed multiline field:
+    'label': 'data(expandedLabel)'
+- Animate the resize using the same style-transition mechanism as hover
+  (`transition-property: 'width, height'`, `transition-duration: 250ms`)
+  so the card grows/shrinks smoothly rather than snapping.
+- Because rendering is plain canvas text (no DOM card), the result reads
+  as a structured text block, not a rich HTML card — this is the
+  intentional, simpler tradeoff from your decision in Section 0. If a
+  richer look is wanted later, the documented upgrade path is to revisit
+  the HTML-overlay alternative.
+
+
+11. CONNECTION / EDGE AWARENESS (Phase 5)
+-------------------------------------------------
+- Precomputed adjacency from architectureStore (Section 6a) drives
+  highlighting — never filter the full edge array at selection time.
+- On selection, inside ONE `cy.batch()` call:
+    1. cy.elements().removeClass('highlighted dimmed')
+    2. selected node + its connectedEdges() + their connectedNodes()
+       get addClass('highlighted')
+    3. everything else gets addClass('dimmed')
+  Batching avoids multiple repaints for what should be a single visual
+  update.
+- Stylesheet rules:
+    '.highlighted': { opacity: 1, 'z-index': 999,
+                       'line-color': <accent>, 'target-arrow-color': <accent> }
+    '.dimmed': { opacity: 0.15 }
+- Direction must be unambiguous regardless of highlight state, so set
+  globally on the base edge style (not just on highlight):
+    'target-arrow-shape': 'triangle'
+    'curve-style': 'bezier'   (or 'taxi' for right-angle routing closer
+                                to a traditional EDA/SoC diagram look —
+                                pick one and apply consistently)
+
+
+12. INSPECTOR PANEL (Phase 6)
+------------------------------------
+Unchanged from the original plan — pure React/Tailwind DOM panel, reads
+from architectureStore's precomputed incoming/outgoing maps. The only
+change: clicking a connected component name calls the shared
+`focusNode(id)` helper from instanceManager (Section 13) instead of
+React Flow's fitView.
+
+
+13. SEARCH (Phase 7)
+----------------------------
+- Fuse.js index built once at load over component name/type/id
+  (unchanged from the original plan).
+- SearchBar.tsx: debounced input (~150ms).
+- On result selection, call one shared `focusNode(id)` function (in
+  instanceManager.ts) used identically by search, direct node clicks,
+  and Inspector cross-links:
+    cy.animate({ fit: { eles: cy.getElementById(id), padding: 80 },
+                  duration: 400 });
+    selectionStore.selectNode(id);
+  All three interaction paths must funnel through this one function.
+
+
+14. PERFORMANCE REQUIREMENTS (Cytoscape-specific — verify at the end)
+-----------------------------------------------------------------------
+- Wrap any multi-element class/style/data change (selection,
+  highlighting, expand/collapse) in `cy.batch()`.
+- Prefer stylesheet selectors + class toggles over per-element
+  `.style()` calls when touching many elements at once.
+- Mutate the live `cy` instance imperatively (add/remove/data/addClass)
+  rather than replacing the `elements` prop on react-cytoscapejs after
+  initial mount.
+- cytoscape-elk runs ELK on the MAIN THREAD by default (unlike the
+  custom Web Worker setup in the React Flow plan). For typical graphs,
+  test this directly first. If it visibly blocks the UI on very large
+  graphs (the "thousands of nodes" case):
+    1. Run elkjs manually inside a Web Worker (same pattern as the
+       original plan) to compute positions off-thread.
+    2. Apply the resulting positions to Cytoscape via a `preset` layout
+       instead of letting cytoscape-elk run on the main thread:
+         cy.layout({ name: 'preset', positions: (node) => computedPos[node.id()] }).run();
+  Document this as the escape hatch, not the default path.
+- Do not re-run layout on expand/collapse — only resize the affected
+  node; Cytoscape recalculates edge endpoints from node bounding boxes
+  automatically.
+- For very large graphs, evaluate cy core options `hideEdgesOnViewport:
+  true` and `hideLabelsOnViewport: true` to keep pan/zoom smooth (edges/
+  labels hidden during interaction, redrawn at rest).
+- Keep React re-renders confined to Inspector/Search/UI chrome — the
+  graph canvas's React wrapper should rarely re-render after initial
+  mount; almost all graph updates happen imperatively against the live
+  `cy` instance, bypassing React's render cycle entirely.
+
+
+15. VISUAL QUALITY / THEME (apply throughout)
+----------------------------------------------------
+- Dark theme by default for all UI chrome (Tailwind): panels, toolbar,
+  search bar, badges.
+- Node fill/border/text colors live in the Cytoscape stylesheet (a JS
+  object/array in styleSheet.ts), NOT in Tailwind classes — colorMap.ts
+  remains the single source of truth feeding both, so Inspector badges
+  and graph nodes never visually drift apart.
+- Use one consistent transition timing scale across hover (150ms) and
+  expand/collapse (250ms), matching Section 9/10.
+- Be explicit with stakeholders/users that the canvas-rendered node look
+  will read as clean and structured rather than as a glossy HTML card —
+  that tradeoff was chosen deliberately for simplicity in Section 0.
+
+
+16. BUILD ORDER SUMMARY (for the agent to follow sequentially)
+-----------------------------------------------------------------------
+  Phase 1: types/, data/sample-architecture.json, colorMap.ts,
+           expandedLabel.ts
+  Phase 2: store/ (architectureStore, graphStore, selectionStore) +
+           lib/cytoscape/setup.ts (extension registration)
+  Phase 3: lib/cytoscape/cytoscapeAdapter.ts + elkLayoutConfig.ts +
+           useElkLayout hook
+  Phase 4: lib/cytoscape/styleSheet.ts + components/graph/
+           CytoscapeCanvas.tsx + GraphToolbar.tsx + instanceManager.ts
+  Phase 5: connection highlighting (classes + batch updates + selection
+           integration)
+  Phase 6: components/inspector/
+  Phase 7: components/search/ + Fuse.js integration + focusNode wiring
+  Phase 8: performance pass (batch audit, profiler check, large-dataset
+           test, decide on the Web-Worker/preset-layout escape hatch if
+           needed)
+  Phase 9: visual polish pass (stylesheet refinement, hover/expand
+           transition tuning, minimap/grid decision finalized)
+  Phase 10: README.md documenting setup, scripts, the domain JSON schema,
+            and the cytoscapeAdapter conversion step for future authors
+
+Deliverable at the end: a working ip-xact app, runnable via `npm install
+&& npm run dev`, loading data/sample-architecture.json by default,
+rendered through Cytoscape.js with cytoscape-elk layout, with all
+requirement areas functioning and verified.

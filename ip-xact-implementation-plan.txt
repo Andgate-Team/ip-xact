@@ -1,0 +1,341 @@
+PROJECT: ip-xact
+Hardware Architecture Explorer — Implementation Plan for AI Coding Agent
+=========================================================================
+
+PURPOSE OF THIS DOCUMENT
+-------------------------
+This file is a complete, self-contained instruction set for an AI coding
+agent (e.g. Claude Code) to implement the "ip-xact" project end to end.
+Follow the phases in order. Do not skip the type/store foundation phases
+before building UI — the architecture depends on them being correct first.
+
+
+1. PROJECT OVERVIEW
+---------------------
+Build a modern Hardware Architecture Explorer web app named "ip-xact".
+
+Stack:
+- React + TypeScript (strict mode)
+- React Flow (graph rendering)
+- ELK.js (automatic hierarchical layout, run in a Web Worker)
+- TailwindCSS (styling, dark theme default)
+- Zustand (state management, split into multiple slices/stores)
+- Fuse.js (fuzzy search)
+- Vite (build tool)
+
+Input: a JSON architecture model describing a chip/SoC design, containing:
+- components
+- component types
+- ports (per component)
+- registers (per component)
+- directed connections between components (via ports)
+
+Output: an interactive, zoomable, searchable diagram of the architecture,
+styled like a professional EDA/SoC tool, supporting graphs with hundreds
+to thousands of nodes without UI jank.
+
+
+2. PROJECT NAME & SETUP
+-------------------------
+- Project folder / package name: ip-xact
+- Initialize with Vite + React + TypeScript template.
+- Install dependencies: reactflow, elkjs, zustand, fuse.js, tailwindcss,
+  postcss, autoprefixer, clsx (or similar for conditional classNames).
+- Configure tsconfig with "strict": true, "noUncheckedIndexedAccess": true.
+- Configure Tailwind with a dark theme as the default (class="dark" on
+  root, or dark-mode-first design tokens).
+
+
+3. DIRECTORY STRUCTURE (create exactly this layout)
+------------------------------------------------------
+ip-xact/
+  src/
+    types/
+      architecture.ts        -> raw JSON model types
+      graph.ts                -> React Flow node/edge data types
+      index.ts
+    data/
+      sample-architecture.json
+    lib/
+      elk/
+        elkAdapter.ts         -> architecture model -> ELK graph format
+        layoutWorker.ts        -> runs ELK inside a Web Worker
+        layoutCache.ts         -> caches layouts by graph hash
+      transform/
+        modelToFlow.ts         -> architecture model -> RF nodes/edges
+        colorMap.ts             -> component type -> color tokens
+      search/
+        fuseConfig.ts
+    store/
+      architectureStore.ts     -> raw model + derived lookup maps
+      graphStore.ts             -> RF nodes/edges, viewport state
+      selectionStore.ts         -> selectedId, expandedId, highlight sets
+      selectors.ts               -> memoized cross-slice selectors
+    components/
+      graph/
+        FlowCanvas.tsx
+        nodes/
+          ArchitectureNode.tsx
+          NodeHeader.tsx
+          NodePortsList.tsx
+          NodeRegistersList.tsx
+          nodeTypeRegistry.ts
+        edges/
+          ArchitectureEdge.tsx
+        MiniMapPanel.tsx
+        BackgroundGrid.tsx
+      inspector/
+        InspectorPanel.tsx
+        InspectorSection.tsx
+        ConnectionList.tsx
+      search/
+        SearchBar.tsx
+        SearchResultsList.tsx
+      ui/
+        (generic primitives: Badge, Card, IconButton, Panel, etc.)
+    hooks/
+      useElkLayout.ts
+      useNodeHighlighting.ts
+      useSearch.ts
+      useFitViewOnSelect.ts
+    styles/
+      tokens.css               -> CSS variables for node-type colors
+    App.tsx
+    main.tsx
+  tailwind.config.ts
+  tsconfig.json
+  vite.config.ts
+  package.json
+  README.md
+
+
+4. TYPE DEFINITIONS (Phase 1 — build first)
+-----------------------------------------------
+In types/architecture.ts, define strict types mirroring the input JSON:
+- ComponentType: union of "cpu" | "bus" | "memory" | "peripheral" |
+  "interface" | "clockReset" | "custom"
+- Port: { id, name, direction ("in" | "out" | "inout"), width? }
+- Register: { id, name, address?, description? }
+- Component: { id, name, type: ComponentType, ports: Port[],
+  registers: Register[] }
+- Connection: { id, sourceComponentId, sourcePortId,
+  targetComponentId, targetPortId }
+- ArchitectureModel: { components: Component[], connections: Connection[] }
+
+In types/graph.ts, define React-Flow-specific types that wrap the above
+(e.g. ArchitectureNodeData extends Component plus UI-only fields like
+isExpanded) — do NOT let React Flow's internal Node/Edge types leak into
+the domain model. Keep architecture.ts and graph.ts cleanly separated.
+
+In lib/transform/colorMap.ts, define the color token map using
+`satisfies Record<ComponentType, NodeColorTokens>` so missing a type
+is a compile-time error:
+  cpu          -> blue
+  bus          -> purple
+  memory       -> green
+  peripheral   -> orange
+  interface    -> cyan
+  clockReset   -> red
+  custom       -> gray
+Define both a "base" color and a subtler "glow/border" tone per type for
+hover/selection states. Ensure WCAG-reasonable contrast against the dark
+background.
+
+
+5. SAMPLE DATA (Phase 1)
+----------------------------
+Create data/sample-architecture.json representing a small SoC, including
+at least: 1 CPU, 1 system bus, 1-2 memory blocks (RAM/ROM/Flash), 2-3
+peripherals (UART, SPI, GPIO), 1 interface block, 1 clock/reset block,
+and directed connections between them through specific ports. Include
+realistic register names (e.g. UART: CTRL, STATUS, DATA, BAUD). This
+file is used for local development and demoing all features.
+
+
+6. ZUSTAND STORE DESIGN (Phase 2)
+---------------------------------------
+Split into three independent stores — do not build one large store.
+
+a) architectureStore.ts
+   - Holds the parsed ArchitectureModel.
+   - On load, build derived lookup structures ONCE (not recomputed per
+     render): Map<componentId, Component>, Map<componentId, Connection[]>
+     for incoming, Map<componentId, Connection[]> for outgoing.
+   - Expose getters/selectors for O(1) lookups, not array filtering.
+
+b) graphStore.ts
+   - Holds React Flow's nodes[] and edges[] arrays (post-layout).
+   - Holds viewport state if needed.
+   - Provides actions: setNodes, setEdges, updateNodePosition, etc.
+
+c) selectionStore.ts
+   - Holds: selectedNodeId, expandedNodeId, searchQuery,
+     highlightedNodeIds (Set<string>), dimmedNodeIds (Set<string>),
+     highlightedEdgeIds (Set<string>).
+   - Action `selectNode(id)` must: set selectedNodeId, recompute
+     highlighted/dimmed sets from precomputed adjacency in
+     architectureStore (one pass, O(edges)).
+   - Action `expandNode(id)` must: collapse any currently expanded node
+     first, then expand the requested one (only one node expanded at a
+     time, enforced inside the store, not the component).
+
+Rule: All components must subscribe via narrow selectors, e.g.
+  const isExpanded = useSelectionStore(s => s.expandedNodeId === nodeId);
+Never destructure the whole store in a component that only needs one
+field — this causes unnecessary re-renders across the whole graph.
+
+
+7. ELK LAYOUT PIPELINE (Phase 3)
+--------------------------------------
+- lib/elk/elkAdapter.ts: pure function converting ArchitectureModel into
+  ELK's expected graph JSON (nodes with fixed estimated width/height for
+  the COLLAPSED state, edges from connections).
+- lib/elk/layoutWorker.ts: a Web Worker that receives the ELK graph,
+  runs elkjs layout, and returns computed x/y positions. Layout must run
+  off the main thread — never call elkjs synchronously in a component.
+- lib/elk/layoutCache.ts: cache layout results keyed by a hash of the
+  node/edge ID set, so re-opening the same graph doesn't re-run layout.
+- hooks/useElkLayout.ts: orchestrates calling the worker on initial load
+  and applying resulting positions to graphStore.
+- IMPORTANT: Expand/collapse of a node must NOT trigger a full ELK
+  re-layout. Only the node's rendered height should animate; React Flow
+  recalculates edge paths automatically from node bounding boxes. Only
+  re-run full layout if the underlying dataset changes or the user
+  explicitly requests "auto re-arrange."
+
+
+8. GRAPH RENDERING (Phase 4)
+----------------------------------
+- FlowCanvas.tsx: hosts <ReactFlow>, with zoom, pan, fitView, MiniMap,
+  and a dotted/grid Background. Enable `onlyRenderVisibleElements` for
+  performance with large graphs.
+- Define `nodeTypes` and `edgeTypes` objects ONCE outside the component
+  body (or via useMemo with empty deps) — never recreate these objects
+  on every render, as this breaks React Flow's internal memoization.
+- nodeTypeRegistry.ts: maps each ComponentType to its node renderer (can
+  share one ArchitectureNode component with type-driven styling, unless
+  visual needs diverge enough to warrant separate components).
+
+
+9. NODE DESIGN — COLLAPSED STATE (Phase 4)
+------------------------------------------------
+- Rounded corners (rounded-xl or similar), subtle drop shadow, soft
+  gradient background derived from the component's type color, hover
+  scale/elevation transition (transform + shadow on hover, animated with
+  Tailwind transition utilities or Framer Motion).
+- Display: type-colored icon + component name, nothing else.
+- Border/left-accent-bar colored by ComponentType using the color map
+  from Section 4 — must be visually consistent across the entire graph.
+- Wrap in React.memo with a custom comparator checking only: data
+  (component id/name/type), selected, isExpanded (from store selector).
+
+
+10. NODE DESIGN — EXPANDED STATE (Phase 4)
+-------------------------------------------------
+- Only one node may be expanded at any time; expanding a node must
+  auto-collapse whatever was previously expanded (enforced in
+  selectionStore, see Section 6).
+- Animate the height change smoothly (CSS grid-template-rows trick or
+  Framer Motion's `animate` height, NOT abrupt reflow).
+- Expanded layout (vertical card, matches this structure):
+    Header:    icon + component name, "Component" subtitle
+    Divider
+    Ports section:      bullet list of port names (and direction if
+                         relevant)
+    Divider
+    Registers section:  bullet list of register names
+- Lazy-render NodePortsList and NodeRegistersList only when expanded is
+  true (conditional mount, not just visually hidden) so collapsed nodes
+  (the majority at any time) stay cheap to render.
+
+
+11. CONNECTION / EDGE AWARENESS (Phase 5)
+-------------------------------------------------
+- Precompute per-node incoming/outgoing edge ID lists once at load
+  (Section 6a) — never derive this by filtering the full edge array at
+  selection time.
+- On node selection: edges connected to that node get a "highlighted"
+  state (bright, distinct color, animated dash or arrow marker showing
+  direction); all other nodes/edges get a "dimmed" state (reduced
+  opacity, desaturated).
+- Implement this as a precomputed enum/class per edge (highlighted |
+  dimmed | neutral) read directly inside the memoized edge component via
+  Set.has() — do not recompute filters inside each edge's render.
+- Use React Flow's markerEnd/markerStart (arrowheads) to make direction
+  unambiguous regardless of highlight state.
+
+
+12. INSPECTOR PANEL (Phase 6)
+------------------------------------
+- Right-hand fixed/sticky panel, opens when a node is selected.
+- Displays: component name, type (with color-coded badge), full ports
+  list, full registers list, incoming connections (source component +
+  port -> target port), outgoing connections (target component + port).
+- Use the precomputed adjacency maps from architectureStore for incoming
+  /outgoing lists — do not re-derive from raw connections array.
+- Clicking a connected component name inside the Inspector should select
+  that node and trigger fitView/focus (reuse the hook from Section 13).
+
+
+13. SEARCH (Phase 7)
+----------------------------
+- Build the Fuse.js index once when the architecture model loads
+  (index over component name, type, id) — not on every keystroke.
+- SearchBar.tsx: debounced input (~150ms), shows fuzzy-matched results
+  in SearchResultsList.tsx.
+- hooks/useFitViewOnSelect.ts: a single shared "focus a node" function
+  used by search selection, direct node click, and inspector cross-links
+  alike — call reactFlowInstance.fitView({ nodes: [target], duration:
+  400 }) plus selectionStore.selectNode(id). All three interaction paths
+  must funnel through this one function, not duplicate logic.
+
+
+14. PERFORMANCE REQUIREMENTS (apply throughout, verify at the end)
+-----------------------------------------------------------------------
+- React.memo on ArchitectureNode and ArchitectureEdge with custom
+  comparators (Section 9, 11).
+- Zustand selectors everywhere; never subscribe to a whole store object
+  in a component that needs only one field.
+- nodeTypes/edgeTypes objects defined once, not recreated per render.
+- onlyRenderVisibleElements enabled on <ReactFlow>.
+- All adjacency/lookup maps precomputed once at data-load time, reused
+  everywhere (selection highlighting, inspector, search).
+- ELK layout runs in a Web Worker; cached by graph hash; not re-run on
+  expand/collapse.
+- Expanded node content (ports/registers lists) conditionally mounted,
+  not just hidden.
+- Verify with React DevTools Profiler that selecting/expanding a single
+  node does not re-render the full node list — only the affected
+  node(s) and edge(s) should re-render.
+
+
+15. VISUAL QUALITY / THEME (apply throughout)
+----------------------------------------------------
+- Dark theme by default, clean modern dashboard look (inspired by
+  professional EDA/SoC tools — think layered dark grays/near-blacks,
+  subtle borders, soft glows rather than flat saturated fills).
+- Smooth, consistent transition durations across hover, select, and
+  expand/collapse interactions (pick one timing scale, e.g. 150ms for
+  hover, 250-300ms for expand/collapse, and reuse it everywhere).
+- Nodes should read as interactive cards (shadow, gradient, rounded
+  corners, icon) rather than plain boxes at every step of this build —
+  treat this as a continuous quality bar, not a final pass.
+
+
+16. BUILD ORDER SUMMARY (for the agent to follow sequentially)
+-----------------------------------------------------------------------
+  Phase 1: types/, data/sample-architecture.json, colorMap.ts
+  Phase 2: store/ (architectureStore, graphStore, selectionStore)
+  Phase 3: lib/elk/ (adapter, worker, cache) + useElkLayout hook
+  Phase 4: components/graph/ (FlowCanvas, collapsed + expanded node)
+  Phase 5: connection highlighting (edges + selection integration)
+  Phase 6: components/inspector/
+  Phase 7: components/search/ + Fuse.js integration
+  Phase 8: performance pass (memoization audit, profiler check)
+  Phase 9: visual polish pass (dark theme tokens, animations, spacing)
+  Phase 10: README.md documenting setup, scripts, and JSON schema for
+            future architecture model authors
+
+Deliverable at the end: a working ip-xact app, runnable via `npm install
+&& npm run dev`, loading data/sample-architecture.json by default, with
+all 8 requirement areas above functioning and verified.

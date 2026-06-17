@@ -1,0 +1,33 @@
+{
+  "components": {
+    "UART": {
+      "type": "Component",
+      "ports": ["clk", "rst", "tx", "rx"],
+      "registers": ["CTRL", "STATUS"]
+    },
+    "APB_BUS": {
+      "type": "Bus",
+      "ports": ["paddr", "pwrite"],
+      "registers": []
+    },
+    "CPU": {
+      "type": "Component",
+      "ports": ["irq"],
+      "registers": []
+    }
+  },
+  "connections": [
+    {
+      "source": "UART",
+      "target": "APB_BUS"
+    },
+    {
+      "source": "APB_BUS",
+      "target": "CPU"
+    },
+    {
+      "source": "CPU",
+      "target": "UART"
+    }
+  ]
+}
