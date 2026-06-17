@@ -29,8 +29,43 @@ function ArchitectureNodeComponent({ id, data }: NodeProps<ArchitectureNodeData>
         } as CSSProperties
       }
     >
-      <Handle className="!h-2 !w-2 !border-0 !bg-slate-400" type="target" position={Position.Left} />
-      <Handle className="!h-2 !w-2 !border-0 !bg-slate-400" type="source" position={Position.Right} />
+      {isCluster ? null : data.component.ports.map((port, idx) => {
+        const handleId = `port:${data.component.id}:${port.id}`;
+        const isIn = port.direction === "in";
+        const isOut = port.direction === "out";
+        const isInOut = port.direction === "inout";
+
+        const handles: React.ReactElement[] = [];
+        const offset = 6 + idx * 14;
+
+        if (isIn || isInOut) {
+          handles.push(
+            <Handle
+              key={`in:${handleId}`}
+              className="!h-2 !w-2 !border-0 !bg-slate-400"
+              id={handleId}
+              type="target"
+              position={Position.Left}
+              style={{ top: `${offset}px` }}
+            />
+          );
+        }
+
+        if (isOut || isInOut) {
+          handles.push(
+            <Handle
+              key={`out:${handleId}`}
+              className="!h-2 !w-2 !border-0 !bg-slate-400"
+              id={handleId}
+              type="source"
+              position={Position.Right}
+              style={{ top: `${offset}px` }}
+            />
+          );
+        }
+
+        return handles;
+      })}
       <div className="flex">
         <div className="architecture-node__rail w-1.5 shrink-0" style={{ backgroundColor: colors.base }} />
         <div className="architecture-node__content min-w-0 flex-1 p-3.5">

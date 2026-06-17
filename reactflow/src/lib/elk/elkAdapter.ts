@@ -17,19 +17,51 @@ export function flowToElkGraph(nodes: ArchitectureFlowNode[], edges: Architectur
       "elk.layered.spacing.nodeNodeBetweenLayers": "80",
       "elk.layered.wrapping.strategy": "MULTI_EDGE",
       "elk.layered.wrapping.correctionFactor": "1.0",
-      "elk.edgeRouting": "ORTHOGONAL"
+      "elk.edgeRouting": "ORTHOGONAL",
+      // Prefer deterministic port ordering and routing when ports are present.
+      "org.eclipse.elk.portConstraints": "FIXED_ORDER"
     },
-    children: nodes.map((node) => ({
-      id: node.id,
-      width: node.data.kind === "cluster" ? CLUSTER_NODE_WIDTH : COLLAPSED_NODE_WIDTH,
-      height: node.data.kind === "cluster" ? CLUSTER_NODE_HEIGHT : COLLAPSED_NODE_HEIGHT
-    })),
-    edges: edges.map(
-      (edge): ElkExtendedEdge => ({
+    children: nodes.map((node) => {
+      const isCluster = node.data.kind === "cluster";
+
+      // Only component nodes have ports in the current model.
+      const ports = !isCluster && node.data.kind === "component"
+        ? node.data.component.ports.map((port) => {
+            const id = `port:${node.id}:${port.id}`;
+            const side = port.direction === "out" ? "RIGHT" : "LEFT";
+            return { id, side };
+          })
+        : [];
+
+
+      return {
+        id: node.id,
+        width: isCluster ? CLUSTER_NODE_WIDTH : COLLAPSED_NODE_WIDTH,
+        height: isCluster ? CLUSTER_NODE_HEIGHT : COLLAPSED_NODE_HEIGHT,
+        ...(ports.length ? { ports } : {}),
+        ...(node.data.kind === "component" ? { portConstraints: "FIXED_ORDER" } : {})
+      };
+    }),
+    edges: edges.map((edge): ElkExtendedEdge => {
+      const connection = edge.data?.connection;
+      const sourcePort = connection?.sourcePortId;
+      const targetPort = connection?.targetPortId;
+
+      return {
         id: edge.id,
-        sources: [edge.source],
-        targets: [edge.target]
-      })
-    )
+        sources: [
+          {
+            id: edge.source,
+            port: `port:${edge.source}:${sourcePort ?? ""}`
+          }
+        ],
+        targets: [
+          {
+            id: edge.target,
+            port: `port:${edge.target}:${targetPort ?? ""}`
+          }
+        ]
+      } as any;
+    })
   };
 }

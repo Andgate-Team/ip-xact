@@ -74,7 +74,7 @@ function getPrimaryAnchorId(componentId: string, connections: Connection[], anch
     return "unconnected";
   }
 
-  return [...candidates].sort((left, right) => (degree.get(right) ?? 0) - (degree.get(left) ?? 0))[0];
+  return [...candidates].sort((left, right) => (degree.get(right) ?? 0) - (degree.get(left) ?? 0))[0] ?? "unconnected";
 }
 
 function makeClusterId(type: ComponentType, anchorId: string, bucketIndex: number): string {
@@ -181,7 +181,11 @@ function makeClusterNode(cluster: ArchitectureCluster, index: number, columnCoun
 }
 
 function aggregateEdges(model: ArchitectureModel, componentToVisibleId: Map<string, string>): ArchitectureFlowEdge[] {
-  const edgeByPair = new Map<string, { connection: Connection; count: number; source: string; target: string }>();
+  // Key must preserve which ports are connected, otherwise we can’t reference ports in ELK.
+  const edgeByPortPair = new Map<
+    string,
+    { connection: Connection; count: number; source: string; target: string; sourcePortId: string; targetPortId: string }
+  >();
 
   for (const connection of model.connections) {
     const source = componentToVisibleId.get(connection.sourceComponentId);
@@ -191,22 +195,34 @@ function aggregateEdges(model: ArchitectureModel, componentToVisibleId: Map<stri
       continue;
     }
 
-    const key = `${source}->${target}`;
-    const existing = edgeByPair.get(key);
+    const key = `${source}->${target}:${connection.sourcePortId}->${connection.targetPortId}`;
+    const existing = edgeByPortPair.get(key);
 
     if (existing) {
       existing.count += 1;
     } else {
-      edgeByPair.set(key, { connection, count: 1, source, target });
+      edgeByPortPair.set(key, {
+        connection,
+        count: 1,
+        source,
+        target,
+        sourcePortId: connection.sourcePortId,
+        targetPortId: connection.targetPortId
+      });
     }
   }
 
-  return [...edgeByPair.values()].map(({ connection, count, source, target }): ArchitectureFlowEdge => {
+  return [...edgeByPortPair.values()].map(({ connection, count, source, target }): ArchitectureFlowEdge => {
     const data: ArchitectureEdgeData = { connection, connectionCount: count };
     return {
-      id: count > 1 ? `agg_${source}_to_${target}` : connection.id,
+      id: count > 1
+        ? `agg_${source}_to_${target}:${connection.sourcePortId}_to_${connection.targetPortId}`
+        : connection.id,
       source,
       target,
+      // Connect to the correct per-port handles.
+      sourceHandle: `port:${source}:${connection.sourcePortId}`,
+      targetHandle: `port:${target}:${connection.targetPortId}`,
       type: "architecture",
       data,
       markerEnd: { type: MarkerType.ArrowClosed }
@@ -214,13 +230,13 @@ function aggregateEdges(model: ArchitectureModel, componentToVisibleId: Map<stri
   });
 }
 
-export function modelToFlow(model: ArchitectureModel): {
+export function modelToFlow(model: ArchitectureModel, expandedClusterIds?: Set<string>): {
   nodes: ArchitectureFlowNode[];
   edges: ArchitectureFlowEdge[];
 };
 export function modelToFlow(
   model: ArchitectureModel,
-  expandedClusterIds: Set<string> = new Set()
+  expandedClusterIds?: Set<string>
 ): {
   nodes: ArchitectureFlowNode[];
   edges: ArchitectureFlowEdge[];
@@ -231,7 +247,7 @@ export function modelToFlow(
   const { componentToVisibleId, clusters, expandedComponentIds } = buildComponentClusterMap(
     model,
     anchorIds,
-    expandedClusterIds,
+    expandedClusterIds ?? new Set<string>(),
     degree
   );
   const visibleComponents = model.components.filter((component) => anchorIds.has(component.id) || expandedComponentIds.has(component.id));
