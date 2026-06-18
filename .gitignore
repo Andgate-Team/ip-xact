@@ -2,7 +2,7 @@
 *.txt
 .vscode
 .mimocode
-.pdf
+*.pdf
 .ipynb_checkpoints
 __pycache__
 *.pyc

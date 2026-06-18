@@ -1,0 +1,92 @@
+{
+  "components": {
+    "ARM Cortex-M4": {
+      "type": "CPU",
+      "ports": ["clk", "rst", "irq", "nmi", "haddr", "hwrite", "hwdata", "hrdata", "hsel", "hready", "hresp", "htrans", "hburst", "jtag_tdi", "jtag_tms"],
+      "registers": ["PC", "SP", "LR", "xPSR"]
+    },
+    "AXI Interconnect": {
+      "type": "Bus",
+      "ports": ["clk", "rst", "awaddr", "awvalid", "awready", "wdata", "wstrb", "wvalid", "wready", "araddr", "arvalid", "arready", "rdata", "rresp", "rvalid", "rready", "bresp", "bvalid", "bready"],
+      "registers": []
+    },
+    "APB Bridge": {
+      "type": "Bus",
+      "ports": ["clk", "rst", "paddr", "pwrite", "pwdata", "psel", "penable", "prdata", "pready"],
+      "registers": []
+    },
+    "SRAM 256KB": {
+      "type": "Memory",
+      "ports": ["clk", "rst", "addr", "data_in", "data_out", "cs", "wen", "ren"],
+      "registers": []
+    },
+    "Flash 1MB": {
+      "type": "Memory",
+      "ports": ["clk", "rst", "addr", "data_in", "data_out", "cs", "wen", "ren"],
+      "registers": []
+    },
+    "DMA Controller": {
+      "type": "DMA",
+      "ports": ["clk", "rst", "haddr", "hwrite", "hwdata", "hrdata", "hsel", "hready", "hresp", "htrans", "dma_req", "dma_ack", "dma_done"],
+      "registers": ["CTRL", "STATUS", "SRC_ADDR", "DST_ADDR", "XFER_SIZE"]
+    },
+    "NVIC": {
+      "type": "InterruptController",
+      "ports": ["clk", "rst", "irq0", "irq1", "irq2", "irq3", "irq4", "nirq", "nfiq"],
+      "registers": ["ISER0", "ICER0", "ISPR0", "ICPR0", "IABR0", "IPR0"]
+    },
+    "UART0": {
+      "type": "Component",
+      "ports": ["clk", "rst", "paddr", "pwrite", "pwdata", "psel", "penable", "prdata", "txd", "rxd", "irq"],
+      "registers": ["CTRL", "STATUS", "DATA", "BAUD"]
+    },
+    "UART1": {
+      "type": "Component",
+      "ports": ["clk", "rst", "paddr", "pwrite", "pwdata", "psel", "penable", "prdata", "txd", "rxd", "irq"],
+      "registers": ["CTRL", "STATUS", "DATA", "BAUD"]
+    },
+    "SPI0": {
+      "type": "Component",
+      "ports": ["clk", "rst", "paddr", "pwrite", "pwdata", "psel", "penable", "prdata", "sclk", "mosi", "miso", "cs_n", "irq"],
+      "registers": ["CTRL", "STATUS", "TX_DATA", "RX_DATA", "BAUD"]
+    },
+    "GPIO Bank": {
+      "type": "Component",
+      "ports": ["clk", "rst", "paddr", "pwrite", "pwdata", "psel", "penable", "prdata", "gpio_in", "gpio_out", "gpio_dir", "irq"],
+      "registers": ["DATA_IN", "DATA_OUT", "DIR", "IE", "DE"]
+    },
+    "Clock Generator": {
+      "type": "ClockReset",
+      "ports": ["xtal_in", "clk_out", "rst_out"],
+      "registers": ["PLL_CTRL", "PLL_STAT"]
+    },
+    "JTAG Interface": {
+      "type": "Debug",
+      "ports": ["tdi", "tdo", "tms", "tck", "trst_n"],
+      "registers": []
+    }
+  },
+  "connections": [
+    { "source": "ARM Cortex-M4", "target": "AXI Interconnect" },
+    { "source": "AXI Interconnect", "target": "SRAM 256KB" },
+    { "source": "AXI Interconnect", "target": "Flash 1MB" },
+    { "source": "AXI Interconnect", "target": "APB Bridge" },
+    { "source": "AXI Interconnect", "target": "DMA Controller" },
+    { "source": "APB Bridge", "target": "UART0" },
+    { "source": "APB Bridge", "target": "UART1" },
+    { "source": "APB Bridge", "target": "SPI0" },
+    { "source": "APB Bridge", "target": "GPIO Bank" },
+    { "source": "UART0", "target": "NVIC" },
+    { "source": "UART1", "target": "NVIC" },
+    { "source": "SPI0", "target": "NVIC" },
+    { "source": "GPIO Bank", "target": "NVIC" },
+    { "source": "NVIC", "target": "ARM Cortex-M4" },
+    { "source": "DMA Controller", "target": "SRAM 256KB" },
+    { "source": "DMA Controller", "target": "Flash 1MB" },
+    { "source": "Clock Generator", "target": "ARM Cortex-M4" },
+    { "source": "Clock Generator", "target": "AXI Interconnect" },
+    { "source": "Clock Generator", "target": "APB Bridge" },
+    { "source": "Clock Generator", "target": "NVIC" },
+    { "source": "JTAG Interface", "target": "ARM Cortex-M4" }
+  ]
+}

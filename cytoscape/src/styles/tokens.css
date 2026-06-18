@@ -1,0 +1,8 @@
+:root {
+  color-scheme: dark;
+  --eda-bg: #06080d;
+  --eda-panel: #0b1018;
+  --eda-panel-soft: #101721;
+  --eda-border: rgba(255, 255, 255, 0.1);
+  --eda-text: #e2e8f0;
+}
