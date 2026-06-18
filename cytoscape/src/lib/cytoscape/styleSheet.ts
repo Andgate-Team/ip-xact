@@ -49,14 +49,24 @@ const edgeStyles = [
     selector: "edge",
     style: {
       width: 1.5,
-      "line-color": "#4a5568",
-      "target-arrow-color": "#4a5568",
+      "line-color": "#64748b",
+      "target-arrow-color": "#64748b",
       "target-arrow-shape": "triangle",
       "curve-style": "bezier",
       "target-distance-from-node": 2,
       "source-distance-from-node": 2,
-      opacity: 0.7,
-      "z-index": 5
+      opacity: 0.8,
+      "z-index": 5,
+      label: "data(label)",
+      "font-size": 10,
+      "font-weight": "normal",
+      "text-rotation": "autorotate",
+      "text-margin-x": 10,
+      "text-margin-y": -10,
+      color: "#94a3b8",
+      "text-outline-width": 2,
+      "text-outline-color": "#0d1117",
+      "text-opacity": 0.9
     }
   }
 ];

@@ -7,6 +7,13 @@ export function cytoscapeAdapter(
 ): CytoscapeElement[] {
   const elements: CytoscapeElement[] = [];
 
+  const portNameMap = new Map<string, string>();
+  for (const component of model.components) {
+    for (const port of component.ports) {
+      portNameMap.set(port.id, port.name);
+    }
+  }
+
   for (const component of model.components) {
     const node: CytoscapeNodeElement = {
       group: "nodes",
@@ -25,6 +32,9 @@ export function cytoscapeAdapter(
   }
 
   for (const connection of model.connections) {
+    const sourcePortName = portNameMap.get(connection.sourcePortId) ?? connection.sourcePortId;
+    const targetPortName = portNameMap.get(connection.targetPortId) ?? connection.targetPortId;
+
     const edge: CytoscapeEdgeElement = {
       group: "edges",
       data: {
@@ -33,7 +43,7 @@ export function cytoscapeAdapter(
         target: connection.targetComponentId,
         sourcePortId: connection.sourcePortId,
         targetPortId: connection.targetPortId,
-        label: `${connection.sourcePortId} → ${connection.targetPortId}`
+        label: `${sourcePortName} → ${targetPortName}`
       }
     };
     elements.push(edge);

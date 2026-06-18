@@ -32,25 +32,12 @@ function applyLodStyles(cy: cytoscape.Core) {
   };
 
   cy.batch(() => {
-    cy.edges().forEach((edge) => {
-      if (!showEdges) {
-        edge.style("display", "none");
-      } else {
-        const source = edge.source().position();
-        const target = edge.target().position();
-        const onScreen =
-          (source.x >= viewportBox.x1 && source.x <= viewportBox.x2 &&
-            source.y >= viewportBox.y1 && source.y <= viewportBox.y2) ||
-          (target.x >= viewportBox.x1 && target.x <= viewportBox.x2 &&
-            target.y >= viewportBox.y1 && target.y <= viewportBox.y2);
-        edge.style("display", onScreen ? "element" : "none");
-        if (onScreen) {
-          edge.style("text-opacity", showEdgeLabels ? "0.7" : "0");
-        }
-      }
-    });
+    const nodes = cy.nodes();
+    const edges = cy.edges();
 
-    cy.nodes().forEach((node) => {
+    const visibleNodeIds = new Set<string>();
+
+    nodes.forEach((node) => {
       const pos = node.position();
       const onScreen =
         pos.x >= viewportBox.x1 && pos.x <= viewportBox.x2 &&
@@ -59,12 +46,28 @@ function applyLodStyles(cy: cytoscape.Core) {
       if (!onScreen) {
         node.style("display", "none");
       } else {
+        visibleNodeIds.add(node.id());
         node.style("display", "element");
         node.style("width", nodeStyle.width);
         node.style("height", nodeStyle.height);
         node.style("label", nodeStyle.label);
         node.style("border-width", nodeStyle["border-width"]);
         node.style("font-size", nodeStyle["font-size"]);
+      }
+    });
+
+    edges.forEach((edge) => {
+      if (!showEdges) {
+        edge.style("display", "none");
+      } else {
+        const sourceVisible = visibleNodeIds.has(edge.source().id());
+        const targetVisible = visibleNodeIds.has(edge.target().id());
+        const onScreen = sourceVisible || targetVisible;
+
+        edge.style("display", onScreen ? "element" : "none");
+        if (onScreen) {
+          edge.style("text-opacity", showEdgeLabels ? "0.9" : "0");
+        }
       }
     });
   });
@@ -76,6 +79,7 @@ export function CytoscapeCanvas() {
   const zoomTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const elements = useGraphStore((state) => state.elements);
   const isLayoutLoading = useGraphStore((state) => state.isLayoutLoading);
+  const loadingPhase = useGraphStore((state) => state.loadingPhase);
   const renderProgress = useGraphStore((state) => state.renderProgress);
 
   useEffect(() => {
@@ -150,7 +154,7 @@ export function CytoscapeCanvas() {
   return (
     <div className="relative h-full w-full cytoscape-container">
       <div ref={containerRef} style={{ width: "100%", height: "100%" }} />
-      {isLayoutLoading && <LoadingSkeleton progress={renderProgress} />}
+      {isLayoutLoading && <LoadingSkeleton progress={renderProgress} phase={loadingPhase} />}
     </div>
   );
 }

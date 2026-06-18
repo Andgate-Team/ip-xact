@@ -148,6 +148,66 @@ function firstPortId(component: Component | undefined): string {
   return component?.ports[0]?.id ?? "default";
 }
 
+const PORT_WEIGHTS: Record<string, number> = {
+  clk: 10, rst: 10, reset: 10, clock: 10,
+  data: 8, addr: 8, address: 8,
+  valid: 7, ready: 7, enable: 7,
+  req: 6, ack: 6, request: 6, acknowledge: 6,
+  tx: 5, rx: 5, txd: 5, rxd: 5,
+  cs: 4, wen: 4, ren: 4,
+};
+
+function scorePort(port: Port): number {
+  const name = port.name.toLowerCase();
+  let score = 0;
+
+  if (port.direction === "out") score += 3;
+  else if (port.direction === "in") score += 1;
+
+  for (const [pattern, weight] of Object.entries(PORT_WEIGHTS)) {
+    if (name.includes(pattern)) {
+      score += weight;
+      break;
+    }
+  }
+
+  return score;
+}
+
+function findBestPort(sourcePorts: Port[], targetPorts: Port[]): { sourcePort: Port; targetPort: Port } {
+  if (sourcePorts.length === 0 || targetPorts.length === 0) {
+    return {
+      sourcePort: sourcePorts[0] ?? { id: "default", name: "default", direction: "inout" as PortDirection },
+      targetPort: targetPorts[0] ?? { id: "default", name: "default", direction: "inout" as PortDirection }
+    };
+  }
+
+  let bestScore = -1;
+  let bestSource: Port = sourcePorts[0]!;
+  let bestTarget: Port = targetPorts[0]!;
+
+  for (const source of sourcePorts) {
+    for (const target of targetPorts) {
+      const sourceScore = scorePort(source);
+      const targetScore = scorePort(target);
+
+      const sourceBase = source.name.toLowerCase().replace(/_p\d+$/, "");
+      const targetBase = target.name.toLowerCase().replace(/_p\d+$/, "");
+      const nameMatch = sourceBase === targetBase ? 15 : 0;
+
+      const totalScore = sourceScore + targetScore + nameMatch;
+
+      if (totalScore > bestScore) {
+        bestScore = totalScore;
+        bestSource = source;
+        bestTarget = target;
+      }
+    }
+  }
+
+  return { sourcePort: bestSource, targetPort: bestTarget };
+}
+
 function normalizeConnections(connections: unknown, components: Component[]): Connection[] {
   if (!Array.isArray(connections)) {
     throw new Error("JSON must contain components and connections[].");
@@ -178,12 +238,24 @@ function normalizeConnections(connections: unknown, components: Component[]): Co
       throw new Error(`Connection ${index + 1} references a missing component.`);
     }
 
+    let sourcePortId: string;
+    let targetPortId: string;
+
+    if (isString(connection.sourcePortId) && isString(connection.targetPortId)) {
+      sourcePortId = connection.sourcePortId;
+      targetPortId = connection.targetPortId;
+    } else {
+      const { sourcePort, targetPort } = findBestPort(sourceComponent.ports, targetComponent.ports);
+      sourcePortId = sourcePort.id;
+      targetPortId = targetPort.id;
+    }
+
     return {
       id: isString(connection.id) ? connection.id : `conn_${index + 1}_${sourceComponent.id}_to_${targetComponent.id}`,
       sourceComponentId: sourceComponent.id,
-      sourcePortId: isString(connection.sourcePortId) ? connection.sourcePortId : firstPortId(sourceComponent),
+      sourcePortId,
       targetComponentId: targetComponent.id,
-      targetPortId: isString(connection.targetPortId) ? connection.targetPortId : firstPortId(targetComponent)
+      targetPortId
     };
   });
 }

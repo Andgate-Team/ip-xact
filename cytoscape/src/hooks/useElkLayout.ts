@@ -17,7 +17,7 @@ export function useElkLayout(): void {
   useEffect(() => {
     if (!model) return;
 
-    setLayoutLoading(true);
+    setLayoutLoading(true, "layout");
     setRenderProgress(null);
 
     computeLayout(model).then((positions) => {
@@ -28,7 +28,7 @@ export function useElkLayout(): void {
         setLayoutLoading(false);
         fitView();
       } else {
-        setLayoutLoading(false);
+        setLayoutLoading(true, "render");
         progressiveRender(allElements);
       }
     });
@@ -64,6 +64,7 @@ export function useElkLayout(): void {
     }
 
     setElements(allElements);
+    setLayoutLoading(false);
     setRenderProgress(null);
     fitView();
   }
